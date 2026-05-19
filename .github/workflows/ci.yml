@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://user:password@localhost:5432/football_ai
+      NEXTAUTH_SECRET: ci-secret-at-least-32-characters-long
+      NEXTAUTH_URL: http://localhost:3000
+      DATA_PROVIDER: demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma validate
+      - run: npx prisma generate
+      - run: npx tsc --noEmit
+      - run: npm run test
+      - run: npm run build

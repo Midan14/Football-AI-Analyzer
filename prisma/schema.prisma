@@ -1,0 +1,464 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// NextAuth models
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?  @db.Text
+  access_token       String?  @db.Text
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?  @db.Text
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// User model with profile
+model User {
+  id                    String     @id @default(cuid())
+  name                  String?
+  email                 String?    @unique
+  emailVerified         DateTime?
+  image                 String?
+  password              String?    // For email/password auth
+  role                  UserRole   @default(USER)
+  status                UserStatus @default(ACTIVE)
+  
+  // Password reset
+  resetToken            String?
+  resetTokenExpiry      DateTime?
+  
+  // Preferences
+  timezone              String     @default("America/Bogota")
+  language              String     @default("es")
+  modelMode             ModelMode  @default(BALANCED)
+  notificationsEnabled  Boolean    @default(true)
+  bankroll              Float      @default(1000.0)
+  
+  // Relations
+  accounts              Account[]
+  sessions              Session[]
+  watchlist             WatchlistItem[]
+  analyses              Analysis[]
+  predictions           Prediction[]
+  alerts                Alert[]
+  auditLogs             AuditLog[]
+  
+  // Timestamps
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@index([email])
+  @@index([createdAt])
+}
+
+enum UserRole {
+  ADMIN
+  USER
+  ANALYST
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BANNED
+}
+
+enum ModelMode {
+  CONSERVATIVE
+  BALANCED
+  AGGRESSIVE
+}
+
+// Watchlist
+model WatchlistItem {
+  id           String   @id @default(cuid())
+  userId       String
+  fixtureId    String
+  league       String
+  country      String
+  date         DateTime
+  homeTeam     String
+  awayTeam     String
+  notes        String?  @db.Text
+  
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, fixtureId])
+  @@index([userId])
+  @@index([date])
+}
+
+// Analysis history
+model Analysis {
+  id                  String   @id @default(cuid())
+  userId              String
+  fixtureId           String
+  league              String
+  country             String
+  homeTeam            String
+  awayTeam            String
+  matchDate           DateTime
+  
+  // Model results
+  homeWinProb         Float
+  drawProb            Float
+  awayWinProb         Float
+  over15Prob          Float
+  over25Prob          Float
+  under35Prob         Float
+  bttsProb            Float
+  
+  // Confidence & Risk
+  confidenceScore     Float
+  riskFlags           Json     // JSON array of risk flags
+  penalties           Json     // JSON array of penalties
+  
+  // Market data
+  homeWinOdds         Float?
+  drawOdds            Float?
+  awayWinOdds         Float?
+  over25Odds          Float?
+  
+  // Predictions
+  valueMarkets        Json     // Best value opportunities
+  bestBet             String?
+  stakeUnits          Float
+  
+  // Actual result (after match)
+  result              MatchResult?
+  homeGoals           Int?
+  awayGoals           Int?
+  
+  // Metadata
+  modelMode           ModelMode
+  dataProvider        String
+  analysisQuality     AnalysisQuality @default(STANDARD)
+  
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([userId])
+  @@index([fixtureId])
+  @@index([matchDate])
+  @@index([createdAt])
+}
+
+enum AnalysisQuality {
+  LOW
+  STANDARD
+  HIGH
+}
+
+enum MatchResult {
+  HOME_WIN
+  DRAW
+  AWAY_WIN
+  PENDING
+}
+
+// Predictions & tracking
+model Prediction {
+  id              String   @id @default(cuid())
+  userId          String
+  analysisId      String?
+  
+  // Prediction data
+  fixtureId       String
+  leagueId        String?
+  market          PredictionMarket
+  prediction      String   // "HOME_WIN", "OVER_2.5", etc.
+  probability     Float
+  odds            Float?
+  stakeUnits      Float
+  
+  // Status
+  status          PredictionStatus @default(OPEN)
+  roi             Float?   // Calculated after match result
+  
+  // Metadata
+  notes           String?  @db.Text
+  
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  resultDate      DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([leagueId])
+}
+
+enum PredictionMarket {
+  // Tier 1 — derivable from goals only (Poisson matrix already covers these)
+  WIN_1X2
+  DOUBLE_CHANCE
+  OVER_UNDER
+  BTTS
+  EXACT_SCORE
+  EXACT_TOTAL_GOALS
+  GOALS_ODD_EVEN
+  ASIAN_HANDICAP
+  EUROPEAN_HANDICAP
+  WIN_TO_NIL
+  CLEAN_SHEET
+  TEAM_TO_SCORE
+  // Tier 2 — require half-time score
+  HT_RESULT
+  HT_FT
+  HT_OVER_UNDER
+  HT_BTTS
+  GOAL_BOTH_HALVES
+  // Tier 3 — require match stats (corners, cards)
+  CORNERS_OVER_UNDER
+  CORNERS_HANDICAP
+  CARDS_OVER_UNDER
+  RED_CARD_MATCH
+  PENALTY_MATCH
+  // Tier 4-5 — require player-level data
+  FIRST_GOAL_SCORER
+  ANYTIME_SCORER
+  HAT_TRICK
+  PLAYER_BOOKED
+}
+
+enum PredictionStatus {
+  OPEN
+  WON
+  LOST
+  VOID
+  CANCELED
+}
+
+// Alerts & Notifications
+model Alert {
+  id           String   @id @default(cuid())
+  userId       String
+  
+  // Alert config
+  type         AlertType
+  fixtureId    String?
+  condition    Json     // JSON conditions
+  threshold    Float?
+  
+  // Status
+  status       AlertStatus @default(ACTIVE)
+  lastTriggered DateTime?
+  
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+enum AlertType {
+  VALUE_DETECTED
+  ODD_MOVEMENT
+  LINEUP_CHANGE
+  WEATHER_RISK
+  MARKET_DIVERGENCE
+  CUSTOM
+}
+
+enum AlertStatus {
+  ACTIVE
+  INACTIVE
+  TRIGGERED
+}
+
+// Audit logs for compliance
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String
+  action      String
+  resource    String
+  resourceId  String?
+  changes     Json?    // Before/after values
+  ipAddress   String?
+  userAgent   String?  @db.Text
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// API Rate Limiting
+model RateLimit {
+  id          String   @id @default(cuid())
+  userId      String?
+  endpoint    String
+  requests    Int      @default(1)
+  windowStart DateTime
+  windowEnd   DateTime
+  
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, endpoint, windowStart])
+  @@index([windowEnd])
+}
+
+// System metrics
+model SystemMetric {
+  id          String   @id @default(cuid())
+  metric      String
+  value       Float
+  tags        Json
+  
+  createdAt   DateTime @default(now())
+
+  @@index([metric])
+  @@index([createdAt])
+}
+
+// ML Training dataset — historical matches with real outcomes for model training
+model TrainingData {
+  id                String   @id @default(cuid())
+  fixtureId         String
+  leagueId          String
+  countryId         String
+  season            String
+  matchDate         DateTime
+
+  // Team features — home
+  homeTeamId        String
+  homeTablePosition Int
+  homePoints        Int
+  homeMatchesPlayed Int
+  homeGoalsFor      Int
+  homeGoalsAgainst  Int
+  homeXgFor         Float
+  homeXgAgainst     Float
+  homeForm          String   // e.g. "W,D,L,W,W"
+  homeRestDays      Int
+  homeMotivation    Int
+  homeKeyPlayerStatus String @default("available")
+
+  // Team features — away
+  awayTeamId        String
+  awayTablePosition Int
+  awayPoints        Int
+  awayMatchesPlayed Int
+  awayGoalsFor      Int
+  awayGoalsAgainst  Int
+  awayXgFor         Float
+  awayXgAgainst     Float
+  awayForm          String
+  awayRestDays      Int
+  awayTravelKm      Int
+  awayMotivation    Int
+  awayKeyPlayerStatus String @default("available")
+
+  // Context
+  derby             Boolean  @default(false)
+  mustWinHome       Boolean  @default(false)
+  mustWinAway       Boolean  @default(false)
+  lowDivision       Boolean  @default(false)
+  weatherRisk       String   @default("low")
+  playoff           Boolean  @default(false)
+  relegationRisk    Int      @default(0)
+  rivalRivalry      Boolean  @default(false)
+  copaVsLeague      Boolean  @default(false)
+  prizeMoney        Int      @default(0)
+  psychologicalPressure Int  @default(0)
+  underdogFreedom   Int      @default(0)
+  favoriteParalysis Int    @default(0)
+
+  // Coverage & referee
+  coverageTier      String   @default("standard")
+  hasLineups        Boolean  @default(false)
+  hasOdds           Boolean  @default(false)
+  hasXg             Boolean  @default(false)
+  hasInjuries       Boolean  @default(false)
+  hasReferee        Boolean  @default(false)
+  refereeAvgCards   Float    @default(3.5)
+  refereeHomeBias   Float    @default(0)
+  refereeAvgPenalties Float  @default(0.2)
+  refereeStrictness String   @default("medium")
+
+  // Market odds snapshot
+  homeWinOdds       Float?
+  drawOdds          Float?
+  awayWinOdds       Float?
+  over25Odds        Float?
+  bttsYesOdds       Float?
+
+  // Derived engine outputs (for calibration analysis)
+  engineHomeWinProb Float    @default(0)
+  engineDrawProb    Float    @default(0)
+  engineAwayWinProb Float    @default(0)
+  engineConfidence  Float    @default(0)
+  engineEdge        Float    @default(0)
+
+  // Real outcome — target variables for ML
+  actualHomeGoals   Int
+  actualAwayGoals   Int
+  actualResult      String   // HOME_WIN | DRAW | AWAY_WIN
+  actualBtts        Boolean
+  actualOver25      Boolean
+
+  // ML model predictions (filled after training)
+  mlHomeWinProb     Float?
+  mlDrawProb        Float?
+  mlAwayWinProb     Float?
+  mlBttsProb        Float?
+  mlOver25Prob      Float?
+
+  // Metadata
+  dataProvider      String   @default("api-football")
+  fetchedAt         DateTime @default(now())
+  trainedAt         DateTime?
+
+  @@unique([fixtureId, dataProvider])
+  @@index([leagueId])
+  @@index([season])
+  @@index([matchDate])
+  @@index([actualResult])
+  @@index([trainedAt])
+}

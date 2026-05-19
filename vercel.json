@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/resolve-predictions",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/ml-retrain",
+      "schedule": "0 3 * * 0"
+    }
+  ]
+}
