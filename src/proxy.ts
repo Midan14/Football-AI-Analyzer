@@ -15,17 +15,15 @@ const PUBLIC_ROUTES = [
   "/api/leagues",
   "/api/fixtures",
   "/api/match",
-  "/api/analyze",
-  "/api/deep-analyze",
   "/api/live",
   "/api/openapi",
   "/api/health",
-  "/api/analysis-history",
+  "/api/cron",
 ];
 
 const HEADERS_TO_STRIP = ["x-user-id", "x-user-email", "x-user-role"];
 
-export default async function middleware(request: NextRequest) {
+export default async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Strip identity headers from incoming requests so they cannot be spoofed
@@ -64,12 +62,10 @@ export default async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/api/watchlist/:path*",
-    "/api/predictions/:path*",
-    "/api/user/:path*",
-    "/api/alerts/:path*",
+    "/dashboard",
     "/dashboard/:path*",
     "/analysis/:path*",
     "/predictions/:path*",
+    "/api/:path*",
   ],
 };
