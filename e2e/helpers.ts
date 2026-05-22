@@ -1,5 +1,11 @@
+import type { Page } from "@playwright/test";
+
 export const DEMO_FIXTURE_ID =
   process.env.E2E_FIXTURE_ID ?? "fixture-arsenal-brighton";
+
+export function mainNav(page: Page) {
+  return page.getByRole("navigation", { name: /navegación principal/i });
+}
 
 export function matchCenterUrl(fixtureId = DEMO_FIXTURE_ID): string {
   return `/dashboard?view=${encodeURIComponent("Match Center")}&fixtureId=${encodeURIComponent(fixtureId)}`;

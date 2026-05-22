@@ -1,11 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_FIXTURE_ID, matchCenterUrl, analyzeRequestMatches } from "./helpers";
+import { DEMO_FIXTURE_ID, mainNav, matchCenterUrl, analyzeRequestMatches } from "./helpers";
 
 test.describe("Modo y escenario desde Configuración", () => {
   test("cambiar Conservador + Rotación refetch del análisis en Match Center", async ({ page }) => {
     await page.goto(matchCenterUrl());
 
-    await expect(page.getByRole("navigation", { name: /navegación principal/i })).toBeVisible({
+    const nav = mainNav(page);
+    await expect(nav).toBeVisible({
       timeout: 60_000,
     });
 
@@ -21,7 +22,7 @@ test.describe("Modo y escenario desde Configuración", () => {
     const baselineScore = baselineJson.data?.analysis?.confidence?.score as number;
     expect(baselineScore).toBeGreaterThan(0);
 
-    await page.getByRole("button", { name: "Configuración" }).click();
+    await nav.getByRole("button", { name: "Configuración", exact: true }).click();
     await expect(page.getByRole("heading", { name: /configuración/i })).toBeVisible();
 
     await page
@@ -39,7 +40,7 @@ test.describe("Modo y escenario desde Configuración", () => {
     await expect(page.getByText(/activo:\s*Conservador/i)).toBeVisible();
     await expect(page.getByText(/activo:\s*rotation/i)).toBeVisible();
 
-    await page.getByRole("button", { name: "Match Center" }).click();
+    await nav.getByRole("button", { name: "Match Center", exact: true }).click();
 
     const adjustedFetch = page.waitForResponse(
       (res) =>

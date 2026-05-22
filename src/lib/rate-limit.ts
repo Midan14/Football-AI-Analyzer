@@ -21,17 +21,30 @@ export async function checkRateLimit(
   if (!existing) {
     const roundedStart = new Date(Math.floor(now.getTime() / 60000) * 60000);
     const roundedEnd = new Date(roundedStart.getTime() + windowMinutes * 60 * 1000);
-    await prisma.rateLimit.create({
-      data: {
+    const record = await prisma.rateLimit.upsert({
+      where: {
+        userId_endpoint_windowStart: {
+          userId: userId ?? null,
+          endpoint,
+          windowStart: roundedStart,
+        },
+      },
+      create: {
         userId: userId ?? null,
         endpoint,
         requests: 1,
         windowStart: roundedStart,
         windowEnd: roundedEnd,
       },
+      update: {
+        requests: { increment: 1 },
+      },
     });
 
-    return { allowed: true, remaining: limit - 1, resetAt: roundedEnd };
+    const allowed = record.requests <= limit;
+    const remaining = Math.max(0, limit - record.requests);
+
+    return { allowed, remaining, resetAt: record.windowEnd };
   }
 
   const updated = await prisma.rateLimit.update({
