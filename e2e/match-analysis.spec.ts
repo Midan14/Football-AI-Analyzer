@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_FIXTURE_ID, matchCenterUrl } from "./helpers";
+import { DEMO_FIXTURE_ID, expectMatchCenterVisible, matchCenterUrl } from "./helpers";
 
 test.describe("Flujo login → partido → análisis", () => {
   test("usuario autenticado abre Match Center y recibe análisis del API", async ({ page, request }) => {
@@ -9,7 +9,7 @@ test.describe("Flujo login → partido → análisis", () => {
       timeout: 60_000,
     });
 
-    await expect(page.getByText(/arsenal/i).first()).toBeVisible({ timeout: 60_000 });
+    await expectMatchCenterVisible(page);
 
     const analyzeResponse = page.waitForResponse(
       (res) =>

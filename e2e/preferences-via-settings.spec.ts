@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_FIXTURE_ID, mainNav, matchCenterUrl, analyzeRequestMatches } from "./helpers";
+import { DEMO_FIXTURE_ID, expectMatchCenterVisible, mainNav, matchCenterUrl, analyzeRequestMatches } from "./helpers";
 
 test.describe("Modo y escenario desde Configuración", () => {
   test("cambiar Conservador + Rotación refetch del análisis en Match Center", async ({ page }) => {
@@ -42,16 +42,15 @@ test.describe("Modo y escenario desde Configuración", () => {
 
     await nav.getByRole("button", { name: "Match Center", exact: true }).click();
 
-    const adjustedFetch = page.waitForResponse(
+    const adjusted = await page.waitForResponse(
       (res) =>
         analyzeRequestMatches(res.url(), DEMO_FIXTURE_ID, "Conservador", "rotation") &&
         res.request().method() === "GET" &&
         res.status() === 200,
       { timeout: 90_000 }
     );
-    await expect(page.getByText(/arsenal/i).first()).toBeVisible({ timeout: 60_000 });
 
-    const adjusted = await adjustedFetch;
+    await expectMatchCenterVisible(page);
     const adjustedJson = await adjusted.json();
     const confidence = adjustedJson.data?.analysis?.confidence;
 
