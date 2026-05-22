@@ -3,6 +3,14 @@ import { successResponse, errorResponse, withErrorHandling, Errors } from "@/lib
 import { auth } from "@/auth";
 import { runTraining, runExtraction } from "@/backend/lib/ml/trainer";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { z } from "zod";
+
+const TrainRequestSchema = z.object({
+  extract: z.boolean().optional().default(false),
+  leagueId: z.string().trim().min(1).max(80).optional(),
+  limit: z.number().int().min(10).max(1000).optional().default(100),
+  trials: z.number().int().min(1).max(100).optional().default(30),
+});
 
 /**
  * POST /api/ml/train
@@ -12,15 +20,20 @@ import { checkRateLimit } from "@/lib/rate-limit";
 export const POST = withErrorHandling(async (request: NextRequest) => {
   const session = await auth();
   if (!session?.user?.id) return errorResponse(Errors.UNAUTHORIZED);
+  if (session.user.role !== "ADMIN") return errorResponse(Errors.FORBIDDEN);
 
   const rateLimit = await checkRateLimit(session.user.id, "ml:train", 60, 5);
   if (!rateLimit.allowed) {
     return errorResponse({ code: "RATE_LIMITED", message: "Demasiadas solicitudes de entrenamiento." }, 429);
   }
 
-  // Allow any authenticated user for now; restrict to ADMIN if needed
   const body = await request.json().catch(() => ({}));
-  const { extract = false, leagueId, limit = 100, trials = 30 } = body;
+  const validation = TrainRequestSchema.safeParse(body);
+  if (!validation.success) {
+    return errorResponse(Errors.VALIDATION_ERROR(validation.error.flatten()), 400);
+  }
+
+  const { extract, leagueId, limit, trials } = validation.data;
 
   // Optionally extract new data before training
   if (extract) {

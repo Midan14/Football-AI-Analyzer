@@ -25,6 +25,13 @@ pnpm-debug.log*
 
 # test/coverage
 coverage/
+playwright-report/
+test-results/
+
+# generated ML artifacts
+ml/models/
+ml-service/venv/
+catboost_info/
 
 # debug artifacts
 *.debug.png

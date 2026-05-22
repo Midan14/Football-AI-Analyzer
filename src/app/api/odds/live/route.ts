@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { successResponse, errorResponse, withErrorHandling, Errors } from "@/lib/api-utils";
 import { auth } from "@/auth";
 import { getDataProvider } from "@/backend/lib/providers/provider-factory";
-import { cache, cacheKeys } from "@/lib/cache";
+import { cache } from "@/lib/cache";
 
 /**
  * GET /api/odds/live
@@ -66,7 +66,7 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
     await cache.set(cacheKey, oddsData, ttl);
 
     return successResponse(oddsData);
-  } catch (error) {
+  } catch {
     return errorResponse(Errors.SERVICE_UNAVAILABLE);
   }
 });

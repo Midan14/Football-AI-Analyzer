@@ -88,10 +88,9 @@ export function analyzeH2H(fixture: Fixture, lastN = 5) {
   if (records.length === 0) return null;
 
   // The H2H record stores generic "home"/"away" of that historical match,
-  // not necessarily the current home/away. We approximate by name prefix —
+  // not necessarily the current home/away. We approximate current home by name prefix —
   // imperfect but the only signal H2HRecord exposes today.
   const homeNamePrefix = fixture.home.name.split(" ")[0].toLowerCase();
-  const awayNamePrefix = fixture.away.name.split(" ")[0].toLowerCase();
 
   let homeWins = 0;
   let awayWins = 0;
@@ -156,6 +155,44 @@ export function buildPoissonMatrix(xg: { home: number; away: number }) {
     }
   }
   return matrix;
+}
+
+export function estimateGoalCorrelation(fixture: Fixture, xg: { home: number; away: number }): number {
+  const totalXg = xg.home + xg.away;
+  let rho = 0;
+
+  if (totalXg < 2.2) rho -= 0.05;
+  if (fixture.coverage.tier === "low" || fixture.context.lowDivision) rho -= 0.03;
+  if (fixture.context.derby || fixture.context.rivalRivalry) rho -= 0.02;
+  if (fixture.coverage.hasLineups && fixture.coverage.hasXg && fixture.coverage.hasOdds) rho += 0.02;
+  if (fixture.context.mustWinHome || fixture.context.mustWinAway) rho += 0.02;
+
+  return Math.max(-0.12, Math.min(0.08, rho));
+}
+
+function dixonColesAdjustment(home: number, away: number, lambdaHome: number, lambdaAway: number, rho: number): number {
+  if (home === 0 && away === 0) return 1 - lambdaHome * lambdaAway * rho;
+  if (home === 0 && away === 1) return 1 + lambdaHome * rho;
+  if (home === 1 && away === 0) return 1 + lambdaAway * rho;
+  if (home === 1 && away === 1) return 1 - rho;
+  return 1;
+}
+
+export function buildAdjustedPoissonMatrix(
+  xg: { home: number; away: number },
+  fixture: Fixture
+) {
+  const rho = estimateGoalCorrelation(fixture, xg);
+  const raw = buildPoissonMatrix(xg).map((row) => ({
+    ...row,
+    probability: Math.max(
+      0,
+      row.probability * dixonColesAdjustment(row.home, row.away, xg.home, xg.away, rho)
+    ),
+  }));
+
+  const total = raw.reduce((sum, row) => sum + row.probability, 0) || 1;
+  return raw.map((row) => ({ ...row, probability: row.probability / total }));
 }
 
 export function compute1X2Probabilities(
@@ -271,10 +308,10 @@ export function buildValueTable(
     ["AH Visitante +1", (probabilities.draw + probabilities.awayWin) * 0.85, fixture.market.ahAwayPlus1],
   ];
 
-  // ONLY include markets that have REAL odds from the bookmaker (odds > 0)
-  // This prevents fake edge calculations with default/invented odds
-  return allMarkets
-    .filter(([, , odds]) => odds > 1.01) // Only real odds from API
+  // Include markets WITH real odds for edge calculation
+  // Also include model-only markets (no real odds) as reference
+  const withOdds = allMarkets
+    .filter(([, , odds]) => odds > 1.01)
     .map(([market, modelProbability, odds]) => {
       const marketProbability = impliedProbability(Number(odds));
       const edge = round1(Number(modelProbability) - marketProbability);
@@ -286,4 +323,20 @@ export function buildValueTable(
         verdict: edge > 7 ? "Valor" : edge > 3 ? "Posible" : edge < -7 ? "Evitar" : "Justo",
       } as const;
     });
+
+  // Also include top model-only markets (no real odds) marked as reference
+  const existingMarkets = new Set(withOdds.map(m => m.market));
+  const referenceOnly = allMarkets
+    .filter(([market, prob]) => !existingMarkets.has(market) && prob > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([market, modelProbability]) => ({
+      market: String(market),
+      modelProbability: round1(Number(modelProbability)),
+      marketProbability: 0,
+      edge: 0,
+      verdict: "Referencia (sin cuota real)",
+    } as const));
+
+  return [...withOdds, ...referenceOnly];
 }

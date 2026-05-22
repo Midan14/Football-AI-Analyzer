@@ -11,7 +11,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://user:password@localhost:5432/football_ai
       NEXTAUTH_SECRET: ci-secret-at-least-32-characters-long
-      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_URL: http://localhost:3001
       DATA_PROVIDER: demo
     steps:
       - uses: actions/checkout@v4
@@ -25,3 +25,50 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run test
       - run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: football_ai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U user -d football_ai"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://user:password@localhost:5432/football_ai?schema=public
+      DATABASE_DIRECT_URL: postgresql://user:password@localhost:5432/football_ai?schema=public
+      NEXTAUTH_SECRET: ci-secret-at-least-32-characters-long
+      NEXTAUTH_URL: http://localhost:3001
+      DATA_PROVIDER: demo
+      ALLOW_DEMO_FALLBACK: "true"
+      E2E_USER_EMAIL: user@football-ai.com
+      E2E_USER_PASSWORD: user123456
+      CI: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma db push --skip-generate
+      - run: npm run db:seed
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

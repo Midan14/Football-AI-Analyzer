@@ -1,56 +1,89 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { ChevronLeft, ChevronRight, Search, Star } from "lucide-react";
-import type { Fixture } from "@/shared/domain";
+import { AlertTriangle, Search, Star } from "lucide-react";
+import type { Country, Fixture } from "@/shared/domain";
+import type { FixtureInsight } from "@/frontend/hooks/use-dashboard-summary";
+import { todayIsoDateColombia } from "@/frontend/lib/date-utils";
 
 type FixturesBoardProps = {
   fixtures: Fixture[];
+  selectedDate: string;
+  countries: Country[];
   starred: Set<string>;
   loading: boolean;
-  selectedDate: string;
-  onSelectDate: (date: string) => void;
+  oddsLoading?: boolean;
+  insightMap?: Map<string, FixtureInsight>;
+  insightsLoading?: boolean;
+  insightsError?: boolean;
   onOpenFixture: (fixture: Fixture) => void;
   onToggleStar: (fixture: Fixture) => void;
 };
 
 type StatusFilter = "all" | "live" | "final" | "pre-match";
+type ListFilter = "all" | "watchlist" | "with-odds" | "value" | "high-confidence";
 
-// Popular leagues for quick filter
 const POPULAR_LEAGUES = [
   "Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1",
   "Eredivisie", "Liga MX", "MLS", "Champions League", "Europa League",
 ];
 
+function leaguePriority(leagueName: string): number {
+  const idx = POPULAR_LEAGUES.findIndex((name) =>
+    leagueName.toLowerCase().includes(name.toLowerCase())
+  );
+  return idx === -1 ? 99 : idx;
+}
+
+function fixtureSortScore(fixture: Fixture): number {
+  let score = 0;
+  if (fixture.market.homeWinOdds > 0) score += 1000;
+  if (fixture.status === "live") score += 500;
+  if (fixture.status === "pre-match") score += 200;
+  score -= leaguePriority(fixture.leagueName);
+  return score;
+}
+
 export function FixturesBoard({
   fixtures,
+  selectedDate,
+  countries,
   starred,
   loading,
-  selectedDate,
-  onSelectDate,
+  oddsLoading = false,
+  insightMap,
+  insightsLoading = false,
+  insightsError = false,
   onOpenFixture,
   onToggleStar,
 }: FixturesBoardProps) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [listFilter, setListFilter] = useState<ListFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [leagueFilter, setLeagueFilter] = useState<string | null>(null);
 
-  // Date navigation
-  const dateButtons = useMemo(() => {
-    const dates: string[] = [];
-    for (let i = -2; i <= 2; i++) {
-      const d = new Date(`${selectedDate}T12:00:00`);
-      d.setDate(d.getDate() + i);
-      dates.push(d.toISOString().slice(0, 10));
-    }
-    return dates;
+  const isToday = selectedDate === todayIsoDateColombia();
+
+  useEffect(() => {
+    setStatusFilter("all");
+    setListFilter("all");
+    setSearchQuery("");
+    setLeagueFilter(null);
   }, [selectedDate]);
 
-  // Filter fixtures
+  const countryNames = useMemo(() => {
+    return new Map(countries.map((c) => [c.id, c.name]));
+  }, [countries]);
+
   const filtered = useMemo(() => {
     return fixtures.filter((f) => {
       if (statusFilter !== "all" && f.status !== statusFilter) return false;
+      if (listFilter === "watchlist" && !starred.has(f.id)) return false;
+      if (listFilter === "with-odds" && f.market.homeWinOdds <= 0) return false;
+      const insight = insightMap?.get(f.id);
+      if (listFilter === "value" && (!insight || insight.topEdge < 3)) return false;
+      if (listFilter === "high-confidence" && (!insight || insight.confidence < 72)) return false;
       if (leagueFilter && !f.leagueName.toLowerCase().includes(leagueFilter.toLowerCase())) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -58,13 +91,14 @@ export function FixturesBoard({
           !f.home.name.toLowerCase().includes(q) &&
           !f.away.name.toLowerCase().includes(q) &&
           !f.leagueName.toLowerCase().includes(q)
-        ) return false;
+        ) {
+          return false;
+        }
       }
       return true;
     });
-  }, [fixtures, statusFilter, searchQuery, leagueFilter]);
+  }, [fixtures, statusFilter, listFilter, searchQuery, leagueFilter, starred, insightMap]);
 
-  // Group by league — sort: live first, then pre-match, then final
   const grouped = useMemo(() => {
     const map = new Map<string, { leagueName: string; countryId: string; fixtures: Fixture[] }>();
     for (const f of filtered) {
@@ -74,18 +108,20 @@ export function FixturesBoard({
       }
       map.get(key)!.fixtures.push(f);
     }
+    for (const group of map.values()) {
+      group.fixtures.sort((a, b) => fixtureSortScore(b) - fixtureSortScore(a));
+    }
     return Array.from(map.entries()).sort((a, b) => {
+      const aScore = Math.max(...a[1].fixtures.map(fixtureSortScore));
+      const bScore = Math.max(...b[1].fixtures.map(fixtureSortScore));
+      if (aScore !== bScore) return bScore - aScore;
       const aLive = a[1].fixtures.some((f) => f.status === "live") ? 0 : 1;
       const bLive = b[1].fixtures.some((f) => f.status === "live") ? 0 : 1;
       if (aLive !== bLive) return aLive - bLive;
-      const aPre = a[1].fixtures.some((f) => f.status === "pre-match") ? 0 : 1;
-      const bPre = b[1].fixtures.some((f) => f.status === "pre-match") ? 0 : 1;
-      if (aPre !== bPre) return aPre - bPre;
       return a[1].leagueName.localeCompare(b[1].leagueName);
     });
   }, [filtered]);
 
-  // Available popular leagues in today's fixtures
   const availablePopular = useMemo(() => {
     const leagueNames = new Set(fixtures.map((f) => f.leagueName));
     return POPULAR_LEAGUES.filter((name) =>
@@ -96,29 +132,22 @@ export function FixturesBoard({
   const liveCount = fixtures.filter((f) => f.status === "live").length;
   const finishedCount = fixtures.filter((f) => f.status === "final").length;
   const scheduledCount = fixtures.filter((f) => f.status === "pre-match").length;
+  const watchlistCount = fixtures.filter((f) => starred.has(f.id)).length;
+  const valueCount = fixtures.filter((f) => (insightMap?.get(f.id)?.topEdge ?? 0) >= 3).length;
+  const oddsCount = fixtures.filter((f) => f.market.homeWinOdds > 0).length;
 
   function formatMatchTime(kickoff: string) {
     try {
       const d = new Date(kickoff);
-      return d.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Bogota" });
+      return d.toLocaleTimeString("es-CO", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "America/Bogota",
+      });
     } catch {
       return "--:--";
     }
-  }
-
-  function formatDateLabel(dateStr: string) {
-    const d = new Date(`${dateStr}T12:00:00`);
-    const today = new Date();
-    const todayStr = today.toISOString().slice(0, 10);
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    if (dateStr === todayStr) return "Hoy";
-    if (dateStr === yesterday.toISOString().slice(0, 10)) return "Ayer";
-    if (dateStr === tomorrow.toISOString().slice(0, 10)) return "Mañana";
-    return d.toLocaleDateString("es-CO", { weekday: "short", day: "numeric", month: "short" });
   }
 
   function openFixtureFromKeyboard(event: KeyboardEvent<HTMLDivElement>, fixture: Fixture) {
@@ -129,38 +158,50 @@ export function FixturesBoard({
 
   return (
     <section className="fixtures-board-container">
-      {/* Status filter tabs + date nav */}
       <div className="fb-tabs">
-        <button className={statusFilter === "all" ? "fb-tab active" : "fb-tab"} onClick={() => setStatusFilter("all")}>
+        {!isToday && (
+          <div className="fb-date-banner">
+            Partidos del <strong>{selectedDate}</strong>
+            {statusFilter === "live" && " · sin partidos en vivo en este día"}
+          </div>
+        )}
+        {isToday && statusFilter === "live" && liveCount === 0 && (
+          <div className="fb-date-banner">
+            Ahora mismo la API no reporta partidos en vivo en esta fecha. Si hay juegos en curso,
+            revisá la vista <strong>Partidos en Vivo</strong> (lista dedicada en tiempo real).
+          </div>
+        )}
+        <button
+          type="button"
+          className={statusFilter === "all" ? "fb-tab active" : "fb-tab"}
+          onClick={() => setStatusFilter("all")}
+        >
           Todos <span className="fb-tab-count">{fixtures.length}</span>
         </button>
-        <button className={statusFilter === "live" ? "fb-tab active live" : "fb-tab"} onClick={() => setStatusFilter("live")}>
+        <button
+          type="button"
+          className={statusFilter === "live" ? "fb-tab active live" : "fb-tab"}
+          onClick={() => setStatusFilter("live")}
+        >
           <span className="fb-live-dot" /> En vivo <span className="fb-tab-count">{liveCount}</span>
         </button>
-        <button className={statusFilter === "final" ? "fb-tab active" : "fb-tab"} onClick={() => setStatusFilter("final")}>
+        <button
+          type="button"
+          className={statusFilter === "final" ? "fb-tab active" : "fb-tab"}
+          onClick={() => setStatusFilter("final")}
+        >
           Terminado <span className="fb-tab-count">{finishedCount}</span>
         </button>
-        <button className={statusFilter === "pre-match" ? "fb-tab active" : "fb-tab"} onClick={() => setStatusFilter("pre-match")}>
+        <button
+          type="button"
+          className={statusFilter === "pre-match" ? "fb-tab active" : "fb-tab"}
+          onClick={() => setStatusFilter("pre-match")}
+        >
           Programados <span className="fb-tab-count">{scheduledCount}</span>
         </button>
-
-        <div className="fb-date-nav">
-          <button onClick={() => { const d = new Date(`${selectedDate}T12:00:00`); d.setDate(d.getDate() - 1); onSelectDate(d.toISOString().slice(0, 10)); }}>
-            <ChevronLeft size={16} />
-          </button>
-          {dateButtons.map((date) => (
-            <button key={date} className={date === selectedDate ? "fb-date active" : "fb-date"} onClick={() => onSelectDate(date)}>
-              {formatDateLabel(date)}
-            </button>
-          ))}
-          <button onClick={() => { const d = new Date(`${selectedDate}T12:00:00`); d.setDate(d.getDate() + 1); onSelectDate(d.toISOString().slice(0, 10)); }}>
-            <ChevronRight size={16} />
-          </button>
-        </div>
       </div>
 
-      {/* Search + Popular league filter */}
-      <div className="fb-toolbar">
+      <div className="fb-toolbar fb-toolbar-extended">
         <div className="fb-search">
           <Search size={14} />
           <input
@@ -169,16 +210,74 @@ export function FixturesBoard({
             placeholder="Buscar equipo o liga..."
           />
         </div>
+
+        <div className="fb-list-filters">
+          <button
+            type="button"
+            className={listFilter === "all" ? "fb-list-filter active" : "fb-list-filter"}
+            onClick={() => setListFilter("all")}
+          >
+            Todos
+          </button>
+          <button
+            type="button"
+            className={listFilter === "watchlist" ? "fb-list-filter active" : "fb-list-filter"}
+            onClick={() => setListFilter("watchlist")}
+          >
+            <Star size={12} /> Watchlist <span>{watchlistCount}</span>
+          </button>
+          <button
+            type="button"
+            className={listFilter === "with-odds" ? "fb-list-filter active" : "fb-list-filter"}
+            onClick={() => setListFilter("with-odds")}
+          >
+            Con odds{" "}
+            <span className="fb-tab-count">
+              {oddsLoading ? "…" : oddsCount}
+            </span>
+          </button>
+          <button
+            type="button"
+            className={listFilter === "value" ? "fb-list-filter active" : "fb-list-filter"}
+            onClick={() => {
+              setStatusFilter("all");
+              setListFilter("value");
+            }}
+            title="Muestra partidos con edge ≥ 3% (en todas las pestañas de estado)"
+          >
+            Value <span>{valueCount}</span>
+          </button>
+          <button
+            type="button"
+            className={listFilter === "high-confidence" ? "fb-list-filter active" : "fb-list-filter"}
+            onClick={() => {
+              setStatusFilter("all");
+              setListFilter("high-confidence");
+            }}
+            title="Muestra partidos con confianza ≥ 72 (en todas las pestañas de estado)"
+          >
+            Conf. ≥ 72 <span>{fixtures.filter((f) => (insightMap?.get(f.id)?.confidence ?? 0) >= 72).length}</span>
+          </button>
+        </div>
+
         {availablePopular.length > 0 && (
           <div className="fb-popular">
-            <button className={!leagueFilter ? "fb-pop-btn active" : "fb-pop-btn"} onClick={() => setLeagueFilter(null)}>
+            <button
+              type="button"
+              className={!leagueFilter ? "fb-pop-btn active" : "fb-pop-btn"}
+              onClick={() => setLeagueFilter(null)}
+            >
               Todas
             </button>
             {availablePopular.map((name) => (
               <button
                 key={name}
+                type="button"
                 className={leagueFilter === name ? "fb-pop-btn active" : "fb-pop-btn"}
-                onClick={() => setLeagueFilter(leagueFilter === name ? null : name)}
+                onClick={() => {
+                  setListFilter("all");
+                  setLeagueFilter(leagueFilter === name ? null : name);
+                }}
               >
                 {name}
               </button>
@@ -187,113 +286,167 @@ export function FixturesBoard({
         )}
       </div>
 
-      {/* Fixtures list grouped by league */}
       <div className="fb-list">
         {loading && <div className="fb-loading">Cargando partidos...</div>}
 
+        {!loading && oddsLoading && (
+          <div className="fb-odds-loading">Actualizando cuotas del mercado…</div>
+        )}
+
         {!loading && grouped.length === 0 && (
           <div className="fb-empty">
-            No hay partidos {statusFilter !== "all" ? `(${statusFilter})` : ""} para esta fecha.
+            No hay partidos con los filtros actuales.
+            {listFilter === "value" && valueCount === 0 && (
+              <span>
+                {" "}
+                {insightsError
+                  ? " El escaneo AI falló — reintentá desde el banner superior."
+                  : insightsLoading
+                    ? " El motor está escaneando partidos (máx. 8 por carga)."
+                    : " El motor aún no detectó edge ≥ 3% en esta fecha."}
+              </span>
+            )}
+            {listFilter === "value" && valueCount > 0 && statusFilter !== "all" && (
+              <span> Probá la pestaña <strong>Todos</strong> — los picks con value pueden no ser solo programados.</span>
+            )}
+            {listFilter !== "all" && listFilter !== "value" && " Probá ampliar los criterios de búsqueda."}
           </div>
         )}
 
         {grouped.map(([leagueId, group]) => (
           <div className="fb-league-group" key={leagueId}>
-            {/* League header */}
             <div className="fb-league-header">
-              {group.fixtures[0]?.leagueFlag && <img src={group.fixtures[0].leagueFlag} alt="" className="fb-league-flag" />}
-              {group.fixtures[0]?.leagueLogo && <img src={group.fixtures[0].leagueLogo} alt="" className="fb-league-logo" />}
-              <span className="fb-league-country">{group.countryId}</span>
+              {group.fixtures[0]?.leagueFlag && (
+                <img src={group.fixtures[0].leagueFlag} alt="" className="fb-league-flag" />
+              )}
+              {group.fixtures[0]?.leagueLogo && (
+                <img src={group.fixtures[0].leagueLogo} alt="" className="fb-league-logo" />
+              )}
+              <span className="fb-league-country">
+                {countryNames.get(group.countryId) ?? group.countryId}
+              </span>
               <strong>{group.leagueName}</strong>
-              {group.fixtures[0]?.round && <span className="fb-league-round">– {group.fixtures[0].round}</span>}
+              {group.fixtures[0]?.round && (
+                <span className="fb-league-round">– {group.fixtures[0].round}</span>
+              )}
               <span className="fb-league-count">{group.fixtures.length}</span>
             </div>
 
-            {/* Fixtures */}
-            {group.fixtures.map((fixture) => (
-              <div
-                key={fixture.id}
-                className={`fb-match ${fixture.status}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => onOpenFixture(fixture)}
-                onKeyDown={(event) => openFixtureFromKeyboard(event, fixture)}
-              >
-                {/* Time / Status */}
-                <div className="fb-match-time">
-                  {fixture.status === "live" ? (
-                    <div className="fb-live-time">
-                      <span className="fb-time-start">{formatMatchTime(fixture.kickoff)}</span>
-                      <span className="fb-elapsed-blink">{fixture.elapsed ?? "?"}&apos;</span>
-                    </div>
-                  ) : fixture.status === "final" ? (
-                    <div className="fb-live-time">
-                      <span className="fb-time-start">{formatMatchTime(fixture.kickoff)}</span>
-                      <span className="fb-final-badge">FIN</span>
-                    </div>
-                  ) : (
-                    <span className="fb-scheduled-time">{formatMatchTime(fixture.kickoff)}</span>
-                  )}
-                </div>
-
-                {/* Home team */}
-                <div className="fb-match-home">
-                  <span className="fb-team-name">{fixture.home.name}</span>
-                  {fixture.home.logo && <img src={fixture.home.logo} alt="" className="fb-team-logo" />}
-                </div>
-
-                {/* Score */}
-                <div className="fb-match-score">
-                  {fixture.result ? (
-                    <span className={fixture.status === "live" ? "fb-score-live" : "fb-score-final"}>
-                      {fixture.result.homeGoals} - {fixture.result.awayGoals}
-                    </span>
-                  ) : (
-                    <span className="fb-score-vs">vs</span>
-                  )}
-                </div>
-
-                {/* Away team */}
-                <div className="fb-match-away">
-                  {fixture.away.logo && <img src={fixture.away.logo} alt="" className="fb-team-logo" />}
-                  <span className="fb-team-name">{fixture.away.name}</span>
-                </div>
-
-                {/* HT Score */}
-                <div className="fb-match-ht">
-                  {fixture.result?.firstHalfHome !== undefined && fixture.result.firstHalfHome !== null ? (
-                    <span>HT {fixture.result.firstHalfHome}-{fixture.result.firstHalfAway}</span>
-                  ) : fixture.status === "live" ? (
-                    <span className="fb-live-indicator">●</span>
-                  ) : null}
-                </div>
-
-                {/* Odds */}
-                <div className="fb-match-odds">
-                  {fixture.market.homeWinOdds > 0 ? (
-                    <>
-                      <span className="fb-odd">{fixture.market.homeWinOdds.toFixed(2)}</span>
-                      <span className="fb-odd">{fixture.market.drawOdds.toFixed(2)}</span>
-                      <span className="fb-odd">{fixture.market.awayWinOdds.toFixed(2)}</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="fb-odd no-data">-</span>
-                      <span className="fb-odd no-data">-</span>
-                      <span className="fb-odd no-data">-</span>
-                    </>
-                  )}
-                </div>
-
-                {/* Star */}
-                <button
-                  className="fb-star"
-                  onClick={(e) => { e.stopPropagation(); onToggleStar(fixture); }}
+            {group.fixtures.map((fixture) => {
+              const insight = insightMap?.get(fixture.id);
+              return (
+                <div
+                  key={fixture.id}
+                  className={`fb-match ${fixture.status} ${starred.has(fixture.id) ? "watchlisted" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onOpenFixture(fixture)}
+                  onKeyDown={(event) => openFixtureFromKeyboard(event, fixture)}
                 >
-                  <Star size={14} className={starred.has(fixture.id) ? "gold" : ""} />
-                </button>
-              </div>
-            ))}
+                  <div className="fb-match-time">
+                    {fixture.status === "live" ? (
+                      <div className="fb-live-time">
+                        <span className="fb-time-start">{formatMatchTime(fixture.kickoff)}</span>
+                        <span className="fb-elapsed-blink">{fixture.elapsed ?? "?"}&apos;</span>
+                      </div>
+                    ) : fixture.status === "final" ? (
+                      <div className="fb-live-time">
+                        <span className="fb-time-start">{formatMatchTime(fixture.kickoff)}</span>
+                        <span className="fb-final-badge">FIN</span>
+                      </div>
+                    ) : (
+                      <span className="fb-scheduled-time">{formatMatchTime(fixture.kickoff)}</span>
+                    )}
+                  </div>
+
+                  <div className="fb-match-home">
+                    <span className="fb-team-name">{fixture.home.name}</span>
+                    {fixture.home.logo && (
+                      <img src={fixture.home.logo} alt="" className="fb-team-logo" />
+                    )}
+                  </div>
+
+                  <div className="fb-match-score">
+                    {fixture.result ? (
+                      <span className={fixture.status === "live" ? "fb-score-live" : "fb-score-final"}>
+                        {fixture.result.homeGoals} - {fixture.result.awayGoals}
+                      </span>
+                    ) : (
+                      <span className="fb-score-vs">vs</span>
+                    )}
+                  </div>
+
+                  <div className="fb-match-away">
+                    {fixture.away.logo && (
+                      <img src={fixture.away.logo} alt="" className="fb-team-logo" />
+                    )}
+                    <span className="fb-team-name">{fixture.away.name}</span>
+                  </div>
+
+                  <div className="fb-match-badges">
+                    {starred.has(fixture.id) && (
+                      <span className="fb-badge fb-badge-star" title="En watchlist">
+                        <Star size={10} /> WL
+                      </span>
+                    )}
+                    {fixture.market.homeWinOdds <= 0 && (
+                      <span className="fb-badge fb-badge-warn" title="Sin cuotas">
+                        <AlertTriangle size={10} /> Sin odds
+                      </span>
+                    )}
+                    {fixture.coverage.tier === "low" && (
+                      <span className="fb-badge fb-badge-muted">Baja cob.</span>
+                    )}
+                    {insight && insight.confidence >= 72 && (
+                      <span className="fb-badge fb-badge-conf">{Math.round(insight.confidence)}</span>
+                    )}
+                    {insight && insight.topEdge >= 3 && (
+                      <span className="fb-badge fb-badge-edge">+{insight.topEdge.toFixed(1)}%</span>
+                    )}
+                  </div>
+
+                  <div className="fb-match-ht">
+                    {fixture.result?.firstHalfHome !== undefined &&
+                    fixture.result.firstHalfHome !== null ? (
+                      <span>
+                        HT {fixture.result.firstHalfHome}-{fixture.result.firstHalfAway}
+                      </span>
+                    ) : fixture.status === "live" ? (
+                      <span className="fb-live-indicator">●</span>
+                    ) : insight ? (
+                      <span className="fb-ai-hint">{insight.market}</span>
+                    ) : null}
+                  </div>
+
+                  <div className="fb-match-odds">
+                    {fixture.market.homeWinOdds > 0 ? (
+                      <>
+                        <span className="fb-odd">{fixture.market.homeWinOdds.toFixed(2)}</span>
+                        <span className="fb-odd">{fixture.market.drawOdds.toFixed(2)}</span>
+                        <span className="fb-odd">{fixture.market.awayWinOdds.toFixed(2)}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="fb-odd no-data">-</span>
+                        <span className="fb-odd no-data">-</span>
+                        <span className="fb-odd no-data">-</span>
+                      </>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    className="fb-star"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleStar(fixture);
+                    }}
+                  >
+                    <Star size={14} className={starred.has(fixture.id) ? "gold" : ""} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         ))}
       </div>

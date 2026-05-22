@@ -64,6 +64,16 @@ export function GET() {
             "429": { description: "Rate limit exceeded" },
           },
         },
+        delete: {
+          summary: "Clear cached analysis for a fixture",
+          security: [{ sessionAuth: [] }],
+          parameters: [{ name: "fixtureId", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { description: "Cache clear response", content: { "application/json": { schema: apiResponse } } },
+            "401": { description: "Not authenticated" },
+            "429": { description: "Rate limit exceeded" },
+          },
+        },
       },
       "/api/deep-analyze/{fixtureId}": {
         get: {
@@ -120,6 +130,56 @@ export function GET() {
           },
         },
       },
+      "/api/cron/ml-retrain": {
+        get: {
+          summary: "System ML retraining job",
+          security: [{ cronSecret: [] }],
+          responses: {
+            "200": { description: "Retraining summary", content: { "application/json": { schema: apiResponse } } },
+            "401": { description: "Invalid cron secret" },
+            "500": { description: "Cron secret not configured" },
+          },
+        },
+      },
+      "/api/ml/train": {
+        post: {
+          summary: "Trigger ML model training",
+          security: [{ sessionAuth: [] }],
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    extract: { type: "boolean" },
+                    leagueId: { type: "string" },
+                    limit: { type: "integer", minimum: 10, maximum: 1000 },
+                    trials: { type: "integer", minimum: 1, maximum: 100 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Training status", content: { "application/json": { schema: apiResponse } } },
+            "400": { description: "Validation error" },
+            "401": { description: "Not authenticated" },
+            "403": { description: "Admin role required" },
+            "429": { description: "Rate limit exceeded" },
+          },
+        },
+      },
+      "/api/alerts/stream": {
+        get: {
+          summary: "Stream active alert evaluations via SSE",
+          security: [{ sessionAuth: [] }],
+          responses: {
+            "200": { description: "SSE alert stream" },
+            "401": { description: "Not authenticated" },
+            "429": { description: "Rate limit exceeded" },
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -131,6 +191,11 @@ export function GET() {
         cronBearer: {
           type: "http",
           scheme: "bearer",
+        },
+        cronSecret: {
+          type: "apiKey",
+          in: "header",
+          name: "x-cron-secret",
         },
       },
     },

@@ -18,16 +18,16 @@ type SettingsViewProps = {
 };
 
 const modelModes: [ModelMode, string][] = [
-  ["Conservador", "−3 confianza · apuestas más seguras · stake reducido"],
+  ["Conservador", "−3 pts de confianza y stake más prudente (aplicado en el servidor)"],
   ["Balanceado", "Sin ajuste · configuración por defecto"],
-  ["Agresivo", "+2 confianza · mayor sensibilidad al edge"],
+  ["Agresivo", "+2 pts de confianza (aplicado en el servidor)"],
 ];
 
 const scenarios: [ScenarioId, string, string][] = [
-  ["base", "Base", "Sin ajuste adicional"],
-  ["lineups", "Once confirmado", "+4 confianza"],
-  ["rotation", "Rotación probable", "-9 confianza"],
-  ["weather", "Clima adverso", "-5 confianza"],
+  ["base", "Base", "Sin ajuste de escenario"],
+  ["lineups", "Once confirmado", "+4 pts de confianza"],
+  ["rotation", "Rotación probable", "−9 pts de confianza"],
+  ["weather", "Clima adverso", "−5 pts de confianza"],
 ];
 
 export function SettingsView({
@@ -53,6 +53,12 @@ export function SettingsView({
   const [clearingCache, setClearingCache] = useState(false);
   const [mlStatus, setMlStatus] = useState<{ status: string; message?: string; samples?: number; models?: string[] }>({ status: "unknown" });
   const [mlTraining, setMlTraining] = useState(false);
+  const [providerStatus, setProviderStatus] = useState<{
+    provider: string;
+    message: string;
+    status: "healthy" | "degraded" | "unhealthy";
+    redis: "healthy" | "unhealthy" | "unavailable";
+  } | null>(null);
 
   useEffect(() => {
     fetch("/api/auth/profile")
@@ -81,6 +87,22 @@ export function SettingsView({
     fetchMlStatus();
     const interval = setInterval(fetchMlStatus, 5000);
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/health")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const services = data?.data?.services;
+        if (!services?.dataProvider) return;
+        setProviderStatus({
+          provider: services.dataProvider.provider,
+          message: services.dataProvider.message,
+          status: services.dataProvider.status,
+          redis: services.redis?.status ?? "unavailable",
+        });
+      })
+      .catch(() => {});
   }, []);
 
   const handleTrainML = async () => {
@@ -131,10 +153,12 @@ export function SettingsView({
   const handleClearCache = async () => {
     setClearingCache(true);
     try {
-      await fetch("/api/health");
-      setClearingCache(false);
-      alert("Cache limpiado. Los próximos análisis traerán datos frescos.");
-    } catch {
+      const res = await fetch("/api/cache/clear", { method: "POST" });
+      if (!res.ok) throw new Error("No se pudo limpiar la cache");
+      alert("Cache limpiada. Los próximos análisis traerán datos frescos.");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "No se pudo limpiar la cache");
+    } finally {
       setClearingCache(false);
     }
   };
@@ -206,8 +230,8 @@ export function SettingsView({
             <span className="cfg-unit">unidades</span>
           </div>
           <div className="cfg-bankroll-info">
-            <span>1u = {(bankroll / 100).toFixed(1)}% del bankroll</span>
-            <span>Kelly max = {(bankroll * 0.05).toFixed(0)}u (5%)</span>
+            <span>1u = {(bankroll / 100).toFixed(1)} unidades (1%)</span>
+            <span>Cap por mercado = {(bankroll * 0.01).toFixed(0)} unidades (1%)</span>
           </div>
         </article>
 
@@ -232,7 +256,7 @@ export function SettingsView({
             {mlTraining || mlStatus.status === "running" ? "Entrenando modelos..." : "Entrenar Modelos ML"}
           </button>
           <div style={{ marginTop: 8, fontSize: 12, color: "#94a3b8" }}>
-            Entrena CatBoost + XGBoost + LightGBM sobre datos históricos. El análisis usará ML cuando esté disponible.
+            Entrena el pipeline Python sobre datos históricos. El análisis usará ML cuando haya un modelo disponible.
           </div>
         </article>
 
@@ -241,16 +265,16 @@ export function SettingsView({
           <h3><Database size={16} /> Proveedor de Datos</h3>
           <div className="cfg-provider">
             <div className="cfg-provider-info">
-              <strong>{provider}</strong>
-              <span>Plan Pro · 7,500 requests/día</span>
+              <strong>{providerStatus?.provider ?? provider}</strong>
+              <span>{providerStatus?.message ?? "Estado del proveedor pendiente"}</span>
             </div>
-            <span className="cfg-provider-status">● Activo</span>
+            <span className="cfg-provider-status">● {providerStatus?.status ?? "Activo"}</span>
           </div>
           <div className="cfg-provider-details">
-            <div><span>Endpoint</span><b>v3.football.api-sports.io</b></div>
-            <div><span>Temporada</span><b>2025/2026</b></div>
-            <div><span>Cobertura</span><b>800+ ligas</b></div>
-            <div><span>Datos</span><b>Fixtures, Odds, Stats, Lineups</b></div>
+            <div><span>Backend</span><b>{providerStatus?.provider ?? provider}</b></div>
+            <div><span>Redis</span><b>{providerStatus?.redis ?? "desconocido"}</b></div>
+            <div><span>Datos</span><b>Fixtures, odds, estadísticas y lineups según cobertura</b></div>
+            <div><span>Cache</span><b>TTL dinámico por tipo de dato</b></div>
           </div>
           <button className="cfg-clear-btn" onClick={handleClearCache} disabled={clearingCache}>
             <Trash2 size={13} /> {clearingCache ? "Limpiando..." : "Limpiar cache Redis"}
@@ -262,11 +286,11 @@ export function SettingsView({
           <h3><Zap size={16} /> Motor de Análisis</h3>
           <div className="cfg-motor-info">
             <div><span>Versión</span><b>v2.4.1</b></div>
-            <div><span>Modelos activos</span><b>16</b></div>
+            <div><span>Modelos</span><b>Auditados por estado</b></div>
             <div><span>Ensemble</span><b>Poisson + NegBinom + ELO + Forma</b></div>
-            <div><span>Staking</span><b>Kelly Fraccional (35%)</b></div>
-            <div><span>Simulación</span><b>Monte Carlo 1000 iter.</b></div>
-            <div><span>Heavy Tail</span><b>t-Student</b></div>
+            <div><span>Staking</span><b>Kelly Fraccional (25%)</b></div>
+            <div><span>Simulación</span><b>Monte Carlo híbrido 50k</b></div>
+            <div><span>Heavy Tail</span><b>Binomial negativa</b></div>
             <div><span>Actualización</span><b>15s (live) / 60s (pre)</b></div>
             <div><span>Cache</span><b>Redis (TTL dinámico)</b></div>
           </div>

@@ -79,6 +79,7 @@ export function OperationalStrip({
   fixture,
   loading,
   confidence,
+  confidenceHint,
   riskLevel,
   qualityScore,
   actionableMarkets,
@@ -87,6 +88,7 @@ export function OperationalStrip({
   fixture?: Fixture;
   loading: boolean;
   confidence: number;
+  confidenceHint?: string;
   riskLevel: string;
   qualityScore: number;
   actionableMarkets: number;
@@ -106,7 +108,12 @@ export function OperationalStrip({
         </div>
       </div>
       <MetricPill icon={<Activity size={18} />} label="Calidad" value={`${qualityScore}%`} />
-      <MetricPill icon={<ShieldCheck size={18} />} label="Confianza" value={`${confidence}%`} />
+      <MetricPill
+        icon={<ShieldCheck size={18} />}
+        label="Confianza"
+        value={`${confidence}%`}
+        title={confidenceHint}
+      />
       <MetricPill
         icon={<AlertTriangle size={18} />}
         label="Riesgo"
@@ -124,14 +131,16 @@ function MetricPill({
   label,
   value,
   tone = "neutral",
+  title,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
   tone?: "neutral" | "good" | "warn" | "danger";
+  title?: string;
 }) {
   return (
-    <div className={`metric-pill ${tone}`}>
+    <div className={`metric-pill ${tone}`} title={title}>
       {icon}
       <span>{label}</span>
       <strong>{value}</strong>
@@ -521,9 +530,9 @@ export function ViewConsole({
     },
     "Modelos AI": {
       kicker: "Motor analítico",
-      title: "Poisson + Monte Carlo + penalizaciones",
-      body: "Modelo v1 calcula 1X2, over/under, BTTS, valor esperado, cola gruesa, baja cobertura, divergencia de mercado y stake sugerido sin prometer apuestas seguras.",
-      chips: ["Poisson", "Binomial negativa", "Monte Carlo", "Outliers"],
+      title: "Laboratorio de modelos",
+      body: "Ensemble, tabla de valor, Kelly, simulación xG, inventario auditado y micro-checks del pipeline. Re-ejecuta modelos por partido y exporta PDF.",
+      chips: ["Ensemble", "Valor", "Kelly", "Pipeline"],
     },
     "Análisis Profundo": {
       kicker: "Análisis profundo",
@@ -546,8 +555,8 @@ export function ViewConsole({
     "Partidos en Vivo": {
       kicker: "En vivo",
       title: "Partidos en Tiempo Real",
-      body: "Datos en vivo desde API-Football con polling cada 30s. Marca equipos favoritos con ⭐ para recibir alertas de sonido en goles, tarjetas y penales.",
-      chips: ["Live", "Alertas", "Favoritos", "Tiempo real"],
+      body: "Listado en vivo con filtros por país y liga, estadísticas y eventos con polling cada 10s. Marca equipos favoritos con ⭐ para alertas de sonido en goles, tarjetas y penales.",
+      chips: ["Live", "VALUE/AI", "Favoritos", "10s"],
     },
     Alertas: {
       kicker: "Riesgos",

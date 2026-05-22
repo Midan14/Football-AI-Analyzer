@@ -15,6 +15,7 @@ const PROFILE_SELECT = {
   language: true,
   modelMode: true,
   notificationsEnabled: true,
+  bankroll: true,
   createdAt: true,
 } as const;
 
@@ -22,7 +23,7 @@ const PROFILE_SELECT = {
  * GET /api/auth/profile
  * Get authenticated user profile
  */
-export const GET = withErrorHandling(async (request: NextRequest) => {
+export const GET = withErrorHandling(async (_request: NextRequest) => {
   const session = await auth();
 
   if (!session?.user?.id) {

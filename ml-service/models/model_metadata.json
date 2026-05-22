@@ -1,0 +1,49 @@
+{
+  "trained_at": "2026-05-20T13:57:14.313516",
+  "n_samples": 10000,
+  "n_features": 31,
+  "feature_columns": [
+    "home_win_rate",
+    "away_win_rate",
+    "home_draw_rate",
+    "away_draw_rate",
+    "home_goals_per_game",
+    "away_goals_per_game",
+    "home_conceded_per_game",
+    "away_conceded_per_game",
+    "home_goal_diff",
+    "away_goal_diff",
+    "home_form_points",
+    "away_form_points",
+    "home_home_win_rate",
+    "away_away_win_rate",
+    "home_clean_sheet_rate",
+    "away_clean_sheet_rate",
+    "home_failed_to_score_rate",
+    "away_failed_to_score_rate",
+    "home_penalty_rate",
+    "away_penalty_rate",
+    "strength_diff",
+    "goal_diff_diff",
+    "form_diff",
+    "attack_vs_defense",
+    "defense_vs_attack",
+    "expected_home_goals",
+    "expected_away_goals",
+    "expected_total_goals",
+    "home_ppg",
+    "away_ppg",
+    "ppg_diff"
+  ],
+  "classes": [
+    "AWAY_WIN",
+    "DRAW",
+    "HOME_WIN"
+  ],
+  "accuracy": {
+    "xgboost_1x2": 0.426,
+    "lightgbm_over25": 0.595,
+    "catboost_btts": 0.658,
+    "neural_net": 0.0
+  }
+}

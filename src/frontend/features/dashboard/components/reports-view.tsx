@@ -202,7 +202,7 @@ export function ReportsView({
         {/* Footer */}
         <div className="rpt-footer">
           <p>⚠️ Este informe es informativo y no garantiza resultados. Apuesta responsable. 18+</p>
-          <p>Generado: {new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" })} · Motor v2.4.1 · 16 modelos activos</p>
+          <p>Generado: {new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" })} · Motor v2.4.1 · modelos auditados</p>
         </div>
       </div>
     </section>

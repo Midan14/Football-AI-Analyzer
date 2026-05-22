@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { History, TrendingUp, TrendingDown, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { History, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 
 type AnalysisRecord = {
   id: string;
@@ -24,12 +24,13 @@ type AnalysisRecord = {
 };
 
 type AnalysisHistoryViewProps = {
+  addToast?: (message: string, type?: "info" | "success" | "error" | "warning") => void;
   onOpenFixture?: (record: AnalysisRecord) => void;
 };
 
 const PAGE_SIZE = 15;
 
-export function AnalysisHistoryView({ onOpenFixture }: AnalysisHistoryViewProps) {
+export function AnalysisHistoryView({ addToast, onOpenFixture }: AnalysisHistoryViewProps) {
   const [records, setRecords] = useState<AnalysisRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,11 +84,17 @@ export function AnalysisHistoryView({ onOpenFixture }: AnalysisHistoryViewProps)
 
   const handleReanalyze = async (fixtureId: string) => {
     try {
-      await fetch(`/api/analyze/${encodeURIComponent(fixtureId)}?bust=1`, { method: "DELETE" });
-      await fetch(`/api/analyze/${encodeURIComponent(fixtureId)}`);
+      const bust = await fetch(`/api/analyze/${encodeURIComponent(fixtureId)}?bust=1`, {
+        method: "DELETE",
+      });
+      if (!bust.ok) throw new Error(`Cache: ${bust.status}`);
+      const run = await fetch(`/api/analyze/${encodeURIComponent(fixtureId)}`);
+      if (!run.ok) throw new Error(`Análisis: ${run.status}`);
       await fetchHistory();
-    } catch {
-      // silent
+      addToast?.("Análisis actualizado correctamente.", "success");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "No se pudo re-analizar";
+      addToast?.(`Re-análisis fallido: ${msg}`, "error");
     }
   };
 

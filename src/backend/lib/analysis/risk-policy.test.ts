@@ -10,7 +10,7 @@ import {
 
 describe("risk-policy", () => {
   it("subtracts penalties from base confidence", () => {
-    expect(computeConfidence([{ id: "a", label: "x", points: 10 }])).toBe(72);
+    expect(computeConfidence([{ id: "a", label: "x", points: 10 }])).toBe(68);
   });
 
   it("clamps confidence to the policy floor", () => {
@@ -23,19 +23,19 @@ describe("risk-policy", () => {
   });
 
   it("maps confidence to stake bands", () => {
-    expect(computeStakeUnits(82)).toBe(1);
-    expect(computeStakeUnits(70)).toBe(1);
-    expect(computeStakeUnits(69)).toBe(0.75);
-    expect(computeStakeUnits(56)).toBe(0.75);
-    expect(computeStakeUnits(55)).toBe(0.5);
-    expect(computeStakeUnits(0)).toBe(0.25);
+    expect(computeStakeUnits(82)).toBe(0.5);
+    expect(computeStakeUnits(80)).toBe(0.5);
+    expect(computeStakeUnits(79)).toBe(0.25);
+    expect(computeStakeUnits(70)).toBe(0.25);
+    expect(computeStakeUnits(69)).toBe(0);
+    expect(computeStakeUnits(0)).toBe(0);
   });
 
   it("caps confidence at 70 when either team has <30 matches", () => {
     expect(clampConfidenceForSample(82, 25, 50)).toBe(CONFIDENCE_CAPS.lowSampleMaxConfidence);
     expect(clampConfidenceForSample(82, 50, 25)).toBe(CONFIDENCE_CAPS.lowSampleMaxConfidence);
-    expect(clampConfidenceForSample(60, 25, 50)).toBe(60); // already below cap
-    expect(clampConfidenceForSample(82, 30, 50)).toBe(82); // exactly threshold passes
+    expect(clampConfidenceForSample(60, 25, 50)).toBe(60);
+    expect(clampConfidenceForSample(85, 30, 50)).toBe(85); // above threshold passes clean
   });
 
   it("enforces black-swan floor of 8%", () => {

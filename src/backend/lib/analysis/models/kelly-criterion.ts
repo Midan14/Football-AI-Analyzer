@@ -1,10 +1,12 @@
+import type { FixtureMarket } from "@/shared/domain";
+
 /**
  * Kelly Criterion — Optimal stake sizing based on edge and bankroll.
  *
  * Full Kelly: f* = (bp - q) / b
  * where b = decimal odds - 1, p = model probability, q = 1 - p
  *
- * We use Fractional Kelly (25-50%) because:
+ * We use Fractional Kelly (25%) because:
  * - Full Kelly is too aggressive for football (high variance)
  * - Model probabilities have estimation error
  * - Bankroll preservation is priority
@@ -12,7 +14,7 @@
  * Also implements:
  * - Confidence-adjusted Kelly (reduces stake when model confidence is low)
  * - Multi-bet Kelly (for parlays/accumulators)
- * - Maximum stake cap (never risk more than 5% of bankroll)
+ * - Maximum stake cap (never risk more than 1% of bankroll)
  */
 
 export type KellyResult = {
@@ -36,9 +38,9 @@ export type KellyPortfolio = {
   sharpeRatio: number;     // Risk-adjusted return
 };
 
-const MAX_STAKE_PCT = 5.0;    // Never bet more than 5% of bankroll
-const KELLY_FRACTION = 0.35;  // Use 35% of full Kelly (conservative)
-const MIN_EDGE_TO_BET = 2.0;  // Minimum edge % to consider betting
+const MAX_STAKE_PCT = 1.0;    // Never bet more than 1% of bankroll
+const KELLY_FRACTION = 0.25;  // Use 25% of full Kelly for real-money safety
+const MIN_EDGE_TO_BET = 3.0;  // Minimum edge % to consider betting
 
 /**
  * Calculate Kelly stake for a single bet.
@@ -116,7 +118,7 @@ export function kellyStake(
  */
 export function kellyPortfolio(
   valueTable: Array<{ market: string; modelProbability: number; edge: number }>,
-  fixture: { market: Record<string, number> },
+  fixture: { market: FixtureMarket },
   confidence: number
 ): KellyPortfolio {
   // Map market names to odds — ALL markets from buildValueTable must be here
@@ -154,11 +156,11 @@ export function kellyPortfolio(
   // Sort by expected value
   bets.sort((a, b) => b.expectedValue - a.expectedValue);
 
-  // Cap total exposure at 15% of bankroll
+  // Cap total exposure at 3% of bankroll
   let totalExposure = 0;
   const cappedBets: KellyResult[] = [];
   for (const bet of bets) {
-    if (totalExposure + bet.fractionalKelly > 15) break;
+    if (totalExposure + bet.fractionalKelly > 3) break;
     cappedBets.push(bet);
     totalExposure += bet.fractionalKelly;
   }

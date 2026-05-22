@@ -179,7 +179,6 @@ export function hawkesModel(
   const awayMomentum = 100 - homeMomentum;
 
   // Expected total goals (integrate intensity over remaining time)
-  const remainingMin = Math.max(0, 90 - currentMin);
   const avgIntensity = (intensity0_15 + intensity15_30 + intensity30_45 + intensity45_60 + intensity60_75 + intensity75_90) / 6;
   const expectedTotalGoals = Math.round((avgIntensity * 90 + goalEvents.length) * 10) / 10;
 

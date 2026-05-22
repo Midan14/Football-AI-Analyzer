@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { successResponse, errorResponse, withErrorHandling } from "@/lib/api-utils";
+import { successResponse, errorResponse, withErrorHandling, Errors } from "@/lib/api-utils";
 import { runTraining, runExtraction } from "@/backend/lib/ml/trainer";
 import { prisma } from "@/lib/db";
 
@@ -16,7 +16,11 @@ import { prisma } from "@/lib/db";
  */
 export const GET = withErrorHandling(async (request: NextRequest) => {
   const secret = request.headers.get("x-cron-secret") || request.nextUrl.searchParams.get("secret");
-  const expected = process.env.CRON_SECRET || "football-ai-cron";
+  const expected = process.env.CRON_SECRET;
+
+  if (!expected) {
+    return errorResponse(Errors.INTERNAL_SERVER_ERROR);
+  }
 
   if (secret !== expected) {
     return errorResponse({ code: "UNAUTHORIZED", message: "Cron secret inválido." }, 401);

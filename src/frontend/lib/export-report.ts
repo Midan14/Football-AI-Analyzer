@@ -59,27 +59,57 @@ function addMonteCarloSection(
 
   let y = startY + 10;
   doc.setFontSize(10);
-  doc.text(`Iteraciones: ${monteCarlo.iterations}`, 14, y);
+  doc.text(`Iteraciones: ${monteCarlo.iterations.toLocaleString("es-CO")}`, 14, y);
   y += 6;
   doc.text(`Sharp Ratio: ${monteCarlo.sharpRatio}`, 14, y);
   y += 6;
   doc.text(`Confianza Over 2.5: ${monteCarlo.over25Confidence}%`, 14, y);
   y += 6;
+  if (monteCarlo.hybridMix) {
+    doc.text(
+      `Mezcla híbrida: ${monteCarlo.hybridMix.poissonPct}% Poisson / ${monteCarlo.hybridMix.heavyTailPct}% cola pesada`,
+      14,
+      y
+    );
+    y += 6;
+  }
+
+  const scorelineRows = monteCarlo.topScorelines?.slice(0, 8).map((row) => [
+    row.score,
+    `${row.probability}%`,
+  ]) ?? [];
 
   autoTable(doc, {
     startY: y + 4,
     head: [["Métrica", "Valor"]],
     body: [
-      ["Iteraciones", String(monteCarlo.iterations)],
+      ["Iteraciones", monteCarlo.iterations.toLocaleString("es-CO")],
       ["Over 2.5 Confianza", `${monteCarlo.over25Confidence}%`],
       ["Sharp Ratio", String(monteCarlo.sharpRatio)],
+      ...(monteCarlo.hybridMix
+        ? [["Mezcla", `${monteCarlo.hybridMix.poissonPct}% Poisson / ${monteCarlo.hybridMix.heavyTailPct}% cola pesada`]]
+        : []),
     ],
     theme: "striped",
     headStyles: { fillColor: [139, 92, 246] },
     margin: { left: 14 },
   });
 
-  return (doc as any).lastAutoTable?.finalY ?? y + 40;
+  y = (doc as any).lastAutoTable?.finalY ?? y + 40;
+
+  if (scorelineRows.length) {
+    autoTable(doc, {
+      startY: y + 8,
+      head: [["Marcador", "Probabilidad simulada"]],
+      body: scorelineRows,
+      theme: "striped",
+      headStyles: { fillColor: [34, 197, 94] },
+      margin: { left: 14 },
+    });
+    y = (doc as any).lastAutoTable?.finalY ?? y + 40;
+  }
+
+  return y;
 }
 
 function addHeavyTailSection(

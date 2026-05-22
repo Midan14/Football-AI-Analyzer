@@ -5,8 +5,8 @@
  *
  * Phase 1B (consolidation) + critical-rules pass:
  *   - Sample-size cap: <30 matches → confidence cap 70.
- *   - Market divergence: |model - market| >15% → -20 points.
- *   - Low-division automatic 30% confidence cut.
+ *   - Market divergence: |model - market| >15% → confidence penalty.
+ *   - Low-division automatic confidence penalty.
  *   - Cross-divisional underdog adjustment.
  *   - Heavy-tail black-swan floor (8%).
  *
@@ -27,13 +27,12 @@ export type RiskPolicy = {
 // Bands MUST be sorted descending by minScore. First match wins.
 // Reconsider after Phase 3 surfaces hit-rate / ROI by confidence band.
 export const DEFAULT_POLICY: RiskPolicy = {
-  baseConfidence: 82,
+  baseConfidence: 78,
   confidenceFloor: 30,
   stakeBands: [
-    { minScore: 70, units: 1.0 },
-    { minScore: 56, units: 0.75 },
-    { minScore: 40, units: 0.5 },
-    { minScore: 0, units: 0.25 },
+    { minScore: 80, units: 0.5 },
+    { minScore: 70, units: 0.25 },
+    { minScore: 0, units: 0 },
   ],
 };
 
@@ -46,10 +45,10 @@ export const CONFIDENCE_CAPS = {
   lowSampleMatches: 30,        // <30 matches played → cap at 70
   lowSampleMaxConfidence: 70,
   marketDivergencePct: 15,     // |model - market| > 15 → -12 points
-  marketDivergencePenalty: 12,
-  lowDivisionPct: 30,          // low-division: -15 points (reduced from 30)
-  lowDivisionPenalty: 15,
-  blackSwanFloorPct: 8,        // black-swan probability never drops below 8%
+  marketDivergencePenalty: 10, // reduced from 12
+  lowDivisionPct: 30,
+  lowDivisionPenalty: 12,      // reduced from 15
+  blackSwanFloorPct: 8,
 } as const;
 
 export function computeConfidence(

@@ -29,8 +29,6 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
     }
 
     const market = data.fixture.market;
-    const analysis = data.analysis;
-
     // Build arbitrage scenarios
     // We simulate different bookmaker lines by adjusting vig
     const scenarios = [
@@ -120,7 +118,7 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
       isArbitrageAvailable: arbitrageResults.some(a => a.isArbitrage),
       disclaimer: "Las cuotas mostradas son simuladas. Para arbitraje real, integrar APIs de bookmakers.",
     });
-  } catch (error) {
+  } catch {
     return errorResponse(Errors.SERVICE_UNAVAILABLE);
   }
 });

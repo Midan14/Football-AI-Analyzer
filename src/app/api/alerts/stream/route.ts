@@ -1,4 +1,9 @@
 import { NextRequest } from "next/server";
+import { auth } from "@/auth";
+import { getActiveAlerts } from "@/backend/server/football/alerts-service";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { errorResponse, Errors } from "@/lib/api-utils";
+import { captureException } from "@/lib/sentry";
 
 /**
  * GET /api/alerts/stream
@@ -9,7 +14,16 @@ import { NextRequest } from "next/server";
  * eventSource.onmessage = (e) => console.log(JSON.parse(e.data));
  */
 export const GET = async (request: NextRequest) => {
+  const session = await auth();
+  if (!session?.user?.id) return errorResponse(Errors.UNAUTHORIZED);
+
+  const rateLimit = await checkRateLimit(session.user.id, "alerts:stream", 20, 15);
+  if (!rateLimit.allowed) {
+    return errorResponse({ code: "RATE_LIMITED", message: "Demasiadas conexiones de alertas." }, 429);
+  }
+
   const encoder = new TextEncoder();
+  const userId = session.user.id;
   
   const stream = new ReadableStream({
     start(controller) {
@@ -27,24 +41,29 @@ export const GET = async (request: NextRequest) => {
         }
       }, 30000);
 
-      // Simulate alert events every 60 seconds (replace with real alert detection)
-      const alertInterval = setInterval(() => {
+      const sendActiveAlerts = async () => {
         try {
-          const mockAlert = {
-            type: "VALUE_DETECTED",
-            fixtureId: `mock-${Date.now()}`,
-            market: "Over 2.5",
-            edge: Math.round(Math.random() * 10 + 2),
-            confidence: Math.round(Math.random() * 30 + 60),
-            timestamp: new Date().toISOString(),
-          };
+          const alerts = await getActiveAlerts(userId);
+          for (const alert of alerts) {
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ type: "alert", alert, timestamp: new Date().toISOString() })}\n\n`)
+            );
+          }
+        } catch (error) {
+          captureException(error, { op: "alerts-stream" });
           controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(mockAlert)}\n\n`)
+            encoder.encode(`event: error\ndata: ${JSON.stringify({ message: "No se pudieron evaluar las alertas." })}\n\n`)
           );
-        } catch {
+        }
+      };
+
+      void sendActiveAlerts();
+
+      const alertInterval = setInterval(() => {
+        void sendActiveAlerts().catch(() => {
           clearInterval(alertInterval);
           clearInterval(pingInterval);
-        }
+        });
       }, 60000);
 
       // Cleanup on close

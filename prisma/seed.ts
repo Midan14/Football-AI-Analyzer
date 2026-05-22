@@ -43,6 +43,7 @@ async function main() {
   console.log("✅ Created users:");
   console.log(`   Admin: admin@football-ai.com / admin123456`);
   console.log(`   User: user@football-ai.com / user123456`);
+  console.log(`   Seed IDs: admin=${admin.id}, user=${user.id}`);
 
   // Create sample watchlist item
   const watchlist = await prisma.watchlistItem.upsert({
@@ -65,7 +66,7 @@ async function main() {
     },
   });
 
-  console.log("✅ Created watchlist items");
+  console.log(`✅ Created watchlist item: ${watchlist.id}`);
 
   // Create sample analysis
   const analysis = await prisma.analysis.create({
@@ -111,7 +112,7 @@ async function main() {
     },
   });
 
-  console.log("✅ Created sample analysis");
+  console.log(`✅ Created sample analysis: ${analysis.id}`);
 
   console.log("\n✨ Database seeding completed!");
 }

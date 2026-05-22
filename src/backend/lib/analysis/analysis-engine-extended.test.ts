@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { analyzeFixture } from "@/backend/lib/analysis/analysis-engine";
 import { analyzeFixtureDeep } from "@/backend/lib/analysis/deep-analysis-engine";
 import { demoFixtures } from "@/backend/lib/providers/demo-data";
+import { buildAdjustedPoissonMatrix, buildPoissonMatrix, expectedGoals } from "@/backend/lib/analysis/shared-math";
 
 describe("analyzeFixture - motor de análisis", () => {
   it("calcula probabilidades 1X2 que suman ~100%", () => {
@@ -78,5 +79,28 @@ describe("analyzeFixture - motor de análisis", () => {
     expect(second.monteCarlo.homeWinDist).toEqual(first.monteCarlo.homeWinDist);
     expect(second.monteCarlo.awayWinDist).toEqual(first.monteCarlo.awayWinDist);
     expect(second.monteCarlo.over25Confidence).toBe(first.monteCarlo.over25Confidence);
+  });
+
+  it("aplica corrección Dixon-Coles a marcadores bajos", () => {
+    const fixture = {
+      ...demoFixtures[0],
+      coverage: { ...demoFixtures[0].coverage, tier: "low" as const },
+      context: { ...demoFixtures[0].context, lowDivision: true },
+    };
+    const xg = expectedGoals(fixture);
+    const raw = buildPoissonMatrix(xg).find((row) => row.home === 0 && row.away === 0)?.probability ?? 0;
+    const adjusted = buildAdjustedPoissonMatrix(xg, fixture).find((row) => row.home === 0 && row.away === 0)?.probability ?? 0;
+
+    expect(adjusted).not.toBe(raw);
+    expect(adjusted).toBeGreaterThan(0);
+  });
+
+  it("usa Monte Carlo híbrido de alta iteración y expone marcadores simulados", () => {
+    const result = analyzeFixtureDeep(demoFixtures[0]);
+
+    expect(result.monteCarlo.iterations).toBeGreaterThanOrEqual(50000);
+    expect(result.monteCarlo.hybridMix?.heavyTailPct).toBeGreaterThan(0);
+    expect(result.monteCarlo.topScorelines?.length).toBeGreaterThan(0);
+    expect(result.monteCarlo.topScorelines?.[0].probability).toBeGreaterThan(0);
   });
 });

@@ -18,45 +18,50 @@ export type LiveStatistic = {
 };
 
 export type LiveMatchDetail = {
-  fixture: Fixture & { elapsed?: number; statusShort?: string };
+  fixture: Fixture;
   events: LiveEvent[];
   statistics: LiveStatistic[];
 };
 
-async function fetchLiveFixtures(): Promise<Fixture[]> {
+type LiveFixturesPayload = {
+  fixtures: Fixture[];
+  count: number;
+  provider: string;
+};
+
+async function fetchLiveFixtures(): Promise<LiveFixturesPayload> {
   const res = await fetch("/api/live");
   if (!res.ok) throw new Error("Error fetching live fixtures");
-  const data = unwrapApiData<{ fixtures: Fixture[]; count: number }>(await res.json());
-  return data.fixtures;
+  return unwrapApiData<LiveFixturesPayload>(await res.json());
 }
 
 async function fetchLiveDetail(fixtureId: string): Promise<LiveMatchDetail> {
-  const res = await fetch(`/api/live?id=${fixtureId}`);
+  const res = await fetch(`/api/live?id=${encodeURIComponent(fixtureId)}`);
   if (!res.ok) throw new Error("Error fetching live detail");
   return unwrapApiData<LiveMatchDetail>(await res.json());
 }
 
-/**
- * Polls all live fixtures every 30 seconds
- */
-export function useLiveFixtures() {
-  return useQuery<Fixture[], Error>({
+export function useLiveFixtures(options?: { enabled?: boolean; aggressive?: boolean }) {
+  const interval = options?.aggressive ? 10_000 : 15_000;
+  return useQuery<LiveFixturesPayload, Error>({
     queryKey: ["live-fixtures"],
     queryFn: fetchLiveFixtures,
-    refetchInterval: 30_000, // Poll every 30s
-    staleTime: 15_000,
+    enabled: options?.enabled ?? true,
+    refetchInterval: interval,
+    refetchIntervalInBackground: true,
+    staleTime: 6_000,
+    refetchOnWindowFocus: true,
   });
 }
 
-/**
- * Polls a specific live fixture every 20 seconds for real-time detail
- */
-export function useLiveDetail(fixtureId: string | undefined) {
+export function useLiveDetail(fixtureId: string | undefined, options?: { enabled?: boolean }) {
   return useQuery<LiveMatchDetail, Error>({
     queryKey: ["live-detail", fixtureId],
     queryFn: () => fetchLiveDetail(fixtureId!),
-    enabled: Boolean(fixtureId),
-    refetchInterval: 20_000, // Poll every 20s
-    staleTime: 10_000,
+    enabled: (options?.enabled ?? true) && Boolean(fixtureId),
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
+    staleTime: 5_000,
+    refetchOnWindowFocus: true,
   });
 }

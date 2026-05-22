@@ -5,7 +5,7 @@ import {
   impliedProbability,
   formScore,
   expectedGoals,
-  buildPoissonMatrix,
+  buildAdjustedPoissonMatrix,
   compute1X2Probabilities,
   computeExactScoreProbabilities,
   computeAllGoalMarkets,
@@ -37,6 +37,47 @@ function createSeededRng(seedInput: string): () => number {
   };
 }
 
+function normalSample(rng: () => number): number {
+  const u1 = Math.max(1e-12, rng());
+  const u2 = Math.max(1e-12, rng());
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+function gammaSample(shape: number, scale: number, rng: () => number): number {
+  if (shape < 1) {
+    return gammaSample(shape + 1, scale, rng) * Math.pow(rng(), 1 / shape);
+  }
+
+  const d = shape - 1 / 3;
+  const c = 1 / Math.sqrt(9 * d);
+  for (;;) {
+    const x = normalSample(rng);
+    const v = Math.pow(1 + c * x, 3);
+    if (v <= 0) continue;
+    const u = rng();
+    if (u < 1 - 0.0331 * x ** 4) return d * v * scale;
+    if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v * scale;
+  }
+}
+
+function poissonSample(lambda: number, rng: () => number): number {
+  const safeLambda = Math.max(0.01, lambda);
+  const limit = Math.exp(-safeLambda);
+  let k = 0;
+  let p = 1;
+  do {
+    k += 1;
+    p *= rng();
+  } while (p > limit);
+  return Math.max(0, k - 1);
+}
+
+function negativeBinomialSample(mean: number, dispersion: number, rng: () => number): number {
+  const shape = Math.max(0.5, dispersion);
+  const scale = Math.max(0.01, mean / shape);
+  return poissonSample(gammaSample(shape, scale, rng), rng);
+}
+
 function fallbackMarket(probabilities: DeepAnalysisResult["probabilities"]): ValueRow {
   const options = [
     ["Local gana", probabilities.homeWin],
@@ -54,15 +95,6 @@ function fallbackMarket(probabilities: DeepAnalysisResult["probabilities"]): Val
     edge: 0,
     verdict: "Sin cuotas",
   };
-}
-
-function monteCarloPoisson(lambda: number, iterations: number, noiseScale: number, rng: () => number): number[] {
-  const dist: number[] = [];
-  for (let i = 0; i < iterations; i += 1) {
-    const sample = Math.max(0, Math.round(lambda + (rng() * 2 - 1) * noiseScale * Math.sqrt(lambda)));
-    dist.push(sample);
-  }
-  return dist;
 }
 
 function build360Radar(fixture: Fixture) {
@@ -107,7 +139,7 @@ function build360Radar(fixture: Fixture) {
 
 export function analyzeFixtureDeep(fixture: Fixture): DeepAnalysisResult {
   const xg = expectedGoals(fixture);
-  const matrix = buildPoissonMatrix(xg);
+  const matrix = buildAdjustedPoissonMatrix(xg, fixture);
   const probabilities = compute1X2Probabilities(matrix);
   const topExactScores = computeExactScoreProbabilities(matrix);
   const goalMarkets = computeAllGoalMarkets(matrix);
@@ -152,25 +184,32 @@ export function analyzeFixtureDeep(fixture: Fixture): DeepAnalysisResult {
     ?? valueTable.sort((a, b) => b.edge - a.edge)[0]
     ?? fallbackMarket(probabilities);
 
-  // --- Monte Carlo ---
-  const iterations = 1000;
-  const noiseHome = 0.35;
-  const noiseAway = 0.35;
+  // --- Monte Carlo híbrido para dinero real ---
+  const configuredIterations = Number(process.env.DEEP_MONTE_CARLO_ITERATIONS ?? 50000);
+  const iterations = Math.max(1000, Math.min(100000, Number.isFinite(configuredIterations) ? configuredIterations : 50000));
+  const heavyTailMix = fixture.context.lowDivision || fixture.coverage.tier === "low" ? 0.2 : 0.12;
   const rng = createSeededRng(`${fixture.id}:${round2(xg.home)}:${round2(xg.away)}`);
-  const homeDist = monteCarloPoisson(xg.home, iterations, noiseHome, rng);
-  const awayDist = monteCarloPoisson(xg.away, iterations, noiseAway, rng);
+  const homeDist: number[] = [];
+  const awayDist: number[] = [];
+  const scoreCounts = new Map<string, number>();
   let over25Count = 0;
   let totalOutcomes = 0;
   const simulationResults: number[] = [];
 
   for (let i = 0; i < iterations; i += 1) {
-    const h = homeDist[i];
-    const a = awayDist[i];
+    const useHeavyTail = rng() < heavyTailMix;
+    const h = useHeavyTail ? negativeBinomialSample(xg.home, 2.2, rng) : poissonSample(xg.home, rng);
+    const a = useHeavyTail ? negativeBinomialSample(xg.away, 2.2, rng) : poissonSample(xg.away, rng);
+    if (i < 100) {
+      homeDist.push(h);
+      awayDist.push(a);
+    }
     totalOutcomes += 1;
     if (h > a) simulationResults.push(1);
     else if (h === a) simulationResults.push(0);
     else simulationResults.push(-1);
     if (h + a >= 3) over25Count += 1;
+    scoreCounts.set(`${Math.min(8, h)}-${Math.min(8, a)}`, (scoreCounts.get(`${Math.min(8, h)}-${Math.min(8, a)}`) ?? 0) + 1);
   }
 
   const mean = simulationResults.reduce((s, v) => s + v, 0) / simulationResults.length;
@@ -179,6 +218,10 @@ export function analyzeFixtureDeep(fixture: Fixture): DeepAnalysisResult {
   const stdDev = Math.sqrt(variance);
   const sharpRatio = stdDev > 0 ? round2(mean / stdDev) : 0;
   const over25Confidence = round1((over25Count / totalOutcomes) * 100);
+  const simulatedScorelines = [...scoreCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 15)
+    .map(([score, count]) => ({ score, probability: round1((count / iterations) * 100) }));
 
   // --- Heavy tail / t-Student ---
   const outlierCount = fixture.historicalOutliers?.length ?? 0;
@@ -450,9 +493,11 @@ export function analyzeFixtureDeep(fixture: Fixture): DeepAnalysisResult {
     `1: ${probabilities.homeWin}% | X: ${probabilities.draw}% | 2: ${probabilities.awayWin}%`,
     `Over 1.5: ${probabilities.over15}% | Over 2.5: ${probabilities.over25}% | Under 3.5: ${probabilities.under35}% | BTTS: ${probabilities.btts}%`,
     "",
-    "== MONTE CARLO (1000 iteraciones) ==",
+    `== MONTE CARLO HÍBRIDO (${iterations.toLocaleString("en-US")} iteraciones) ==`,
+    `Mezcla: ${round1((1 - heavyTailMix) * 100)}% Poisson / ${round1(heavyTailMix * 100)}% Binomial negativa heavy-tail`,
     `Distribución 1X2: Sharp Ratio ${sharpRatio}`,
     `Confianza Over 2.5: ${over25Confidence}%`,
+    `Top marcadores simulados: ${simulatedScorelines.map((s) => `${s.score} (${s.probability}%)`).join(", ")}`,
     "",
     "== COLA PESADA / BLACK SWAN ==",
     `Distribución: t-Student con ${degreesOfFreedom} grados de libertad`,
@@ -533,11 +578,16 @@ export function analyzeFixtureDeep(fixture: Fixture): DeepAnalysisResult {
     valueTable,
     monteCarlo: {
       iterations,
-      homeWinDist: homeDist.slice(0, 100),
+      homeWinDist: homeDist,
       drawDist,
-      awayWinDist: awayDist.slice(0, 100),
+      awayWinDist: awayDist,
       over25Confidence,
       sharpRatio,
+      hybridMix: {
+        poissonPct: round1((1 - heavyTailMix) * 100),
+        heavyTailPct: round1(heavyTailMix * 100),
+      },
+      topScorelines: simulatedScorelines,
     },
     heavyTail: {
       distribution: "t-student",

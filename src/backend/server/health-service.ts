@@ -73,7 +73,7 @@ export async function checkHealth(): Promise<HealthStatus> {
 
   try {
     const pgStart = Date.now();
-    const result = await prisma.$queryRaw<Array<{ "?column?": number }>>`SELECT 1`;
+    await prisma.$queryRaw<Array<{ "?column?": number }>>`SELECT 1`;
     const pgLatency = Date.now() - pgStart;
     pgStatus = {
       status: "healthy",

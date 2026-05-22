@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { AddToWatchlistSchema, RemoveFromWatchlistSchema } from "@/lib/schemas/watchlist";
+import { AddToWatchlistSchema } from "@/lib/schemas/watchlist";
 import { successResponse, errorResponse, withErrorHandling, Errors } from "@/lib/api-utils";
 import { cache, cacheKeys } from "@/lib/cache";
 import { auth } from "@/auth";
@@ -9,7 +9,7 @@ import { auth } from "@/auth";
  * GET /api/user/watchlist
  * Get user's watchlist
  */
-export const GET = withErrorHandling(async (request: NextRequest) => {
+export const GET = withErrorHandling(async (_request: NextRequest) => {
   const session = await auth();
 
   if (!session?.user?.id) {

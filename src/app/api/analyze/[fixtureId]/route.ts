@@ -6,13 +6,31 @@ import { cache, cacheKeys } from "@/lib/cache";
 import { addBreadcrumb, captureException } from "@/lib/sentry";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { checkRateLimit } from "@/lib/rate-limit";
 import type { MatchResult } from "@prisma/client";
+import type { MatchAnalysisResponse } from "@/shared/domain";
+import {
+  normalizeAnalysisPreferences,
+  analysisModelModeToPrisma,
+  ANALYSIS_MODEL_MODES,
+  ANALYSIS_SCENARIO_IDS,
+  type AnalysisPreferences,
+} from "@/shared/analysis-preferences";
+import { AnalysisQuerySchema } from "@/lib/schemas/analysis";
 
 const FixtureIdSchema = z.object({
   fixtureId: z.string().min(1, "fixtureId es requerido"),
 });
 
-export const GET = withErrorHandling(async (request: NextRequest, context: { params: Promise<{ fixtureId: string }> }) => {
+export const GET = withErrorHandling(async (_request: NextRequest, context: { params: Promise<{ fixtureId: string }> }) => {
+  const session = await auth();
+  if (!session?.user?.id) return errorResponse(Errors.UNAUTHORIZED);
+
+  const rateLimit = await checkRateLimit(session.user.id, "analyze:get", 120, 15);
+  if (!rateLimit.allowed) {
+    return errorResponse({ code: "RATE_LIMITED", message: "Demasiadas solicitudes de análisis." }, 429);
+  }
+
   const { fixtureId } = await context.params;
 
   const validation = FixtureIdSchema.safeParse({ fixtureId });
@@ -24,24 +42,43 @@ export const GET = withErrorHandling(async (request: NextRequest, context: { par
   }
 
   const { fixtureId: validatedFixtureId } = validation.data;
+  const query = Object.fromEntries(new URL(_request.url).searchParams.entries());
+  const queryValidation = AnalysisQuerySchema.safeParse(query);
+  if (!queryValidation.success) {
+    return errorResponse(Errors.VALIDATION_ERROR(queryValidation.error.flatten()), 400);
+  }
 
-  const cacheKey = cacheKeys.analysis(validatedFixtureId);
-  const cached = await cache.get(cacheKey);
-  if (cached) {
-    addBreadcrumb(`Analysis cache hit for ${validatedFixtureId}`, "analysis", "info");
-    return successResponse(cached);
+  const preferences = normalizeAnalysisPreferences({
+    modelMode: queryValidation.data.modelMode,
+    scenario: queryValidation.data.scenario,
+  });
+  const forceRefresh = queryValidation.data.refresh === "1";
+
+  const cacheKey = cacheKeys.analysis(
+    validatedFixtureId,
+    preferences.modelMode,
+    preferences.scenario
+  );
+  if (!forceRefresh) {
+    const cached = await cache.get(cacheKey);
+    if (cached) {
+      addBreadcrumb(`Analysis cache hit for ${validatedFixtureId}`, "analysis", "info");
+      return successResponse(cached);
+    }
   }
 
   try {
     addBreadcrumb(`Analyzing fixture ${validatedFixtureId}`, "analysis", "info");
-    const analysisData = await analyzeMatch(validatedFixtureId);
-    // Dynamic cache: 15s for live matches, 60s for pre-match/final
-    const fixture = (analysisData as any)?.fixture;
-    const ttl = fixture?.status === "live" ? 15 : 60;
+    const analysisData: MatchAnalysisResponse = await analyzeMatch(
+      validatedFixtureId,
+      session.user.id,
+      preferences
+    );
+    const ttl = analysisData.fixture.status === "live" ? 15 : 60;
     await cache.set(cacheKey, analysisData, ttl);
 
     // Persist to DB if user is authenticated (non-blocking)
-    persistAnalysis(validatedFixtureId, analysisData).catch(() => {});
+    persistAnalysis(validatedFixtureId, analysisData, preferences).catch(() => {});
 
     return successResponse(analysisData);
   } catch (error) {
@@ -51,7 +88,11 @@ export const GET = withErrorHandling(async (request: NextRequest, context: { par
   }
 });
 
-async function persistAnalysis(fixtureId: string, data: any) {
+async function persistAnalysis(
+  fixtureId: string,
+  data: MatchAnalysisResponse,
+  preferences: AnalysisPreferences
+) {
   try {
     const session = await auth();
     if (!session?.user?.id) return;
@@ -117,7 +158,7 @@ async function persistAnalysis(fixtureId: string, data: any) {
           awayTeam: fixture.away?.name ?? "",
           matchDate: new Date(fixture.kickoff),
           ...analysisPayload,
-          modelMode: "BALANCED",
+          modelMode: analysisModelModeToPrisma(preferences.modelMode),
           dataProvider: process.env.DATA_PROVIDER ?? "api-football",
         },
       });
@@ -132,8 +173,20 @@ async function persistAnalysis(fixtureId: string, data: any) {
  * Clears the Redis cache for this fixture so the next GET re-runs the analysis.
  */
 export const DELETE = withErrorHandling(async (_request: NextRequest, context: { params: Promise<{ fixtureId: string }> }) => {
+  const session = await auth();
+  if (!session?.user?.id) return errorResponse(Errors.UNAUTHORIZED);
+
+  const rateLimit = await checkRateLimit(session.user.id, "analyze:clear", 30, 15);
+  if (!rateLimit.allowed) {
+    return errorResponse({ code: "RATE_LIMITED", message: "Demasiadas solicitudes de limpieza de caché." }, 429);
+  }
+
   const { fixtureId } = await context.params;
-  await cache.delete(cacheKeys.analysis(fixtureId));
+  for (const modelMode of ANALYSIS_MODEL_MODES) {
+    for (const scenario of ANALYSIS_SCENARIO_IDS) {
+      await cache.delete(cacheKeys.analysis(fixtureId, modelMode, scenario));
+    }
+  }
   await cache.delete(cacheKeys.fixture(fixtureId));
   return successResponse({ cleared: true, fixtureId });
 });

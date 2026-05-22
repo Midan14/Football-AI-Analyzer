@@ -1,9 +1,14 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { listLeagues } from "@/backend/server/football/football-service";
+import { DemoProvider } from "@/backend/lib/providers/demo-provider";
 import { successResponse, errorResponse, withErrorHandling, Errors } from "@/lib/api-utils";
 import { cache, cacheKeys } from "@/lib/cache";
 import { captureException } from "@/lib/sentry";
+
+function allowDemoFallback(): boolean {
+  return process.env.NODE_ENV !== "production" || process.env.ALLOW_DEMO_FALLBACK === "true";
+}
 
 const LeaguesQuerySchema = z.object({
   countryId: z.string().min(1, "countryId es requerido").optional(),
@@ -39,6 +44,12 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
     return successResponse(data);
   } catch (error) {
     captureException(error, { endpoint: "/api/leagues", countryId: validatedCountryId });
+    if (allowDemoFallback()) {
+      const demo = new DemoProvider();
+      const data = { leagues: await demo.getLeagues(validatedCountryId) };
+      await cache.set(cacheKeys.leagues(validatedCountryId || "all"), data, 300);
+      return successResponse(data);
+    }
     return errorResponse(Errors.SERVICE_UNAVAILABLE);
   }
 });

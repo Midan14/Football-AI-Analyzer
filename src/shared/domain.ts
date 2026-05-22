@@ -15,6 +15,62 @@ export type League = {
   tier: CoverageTier;
   season: string;
   coverageScore: number;
+  logo?: string;
+};
+
+export type LeagueCoverageCapabilities = {
+  fixtures: boolean;
+  standings: boolean;
+  odds: boolean;
+  lineups: boolean;
+  xg: boolean;
+  injuries: boolean;
+  referee: boolean;
+  h2h: boolean;
+  momentum: boolean;
+};
+
+export type LeagueCoverageReport = {
+  leagueId: string;
+  leagueName: string;
+  tier: CoverageTier;
+  coverageScore: number;
+  provider: string;
+  season: string;
+  capabilities: LeagueCoverageCapabilities;
+  confidenceImpact: string;
+  source: "provider-metadata" | "inferred";
+};
+
+export type LeagueStandingRow = {
+  rank: number;
+  teamId: string;
+  teamName: string;
+  teamLogo?: string;
+  played: number;
+  points: number;
+  goalDiff: number;
+};
+
+export type LeagueSeasonStats = {
+  leagueId: string;
+  from: string;
+  to: string;
+  sampleSize: number;
+  finishedMatches: number;
+  liveMatches: number;
+  avgGoals: number;
+  withOddsPct: number;
+};
+
+export type TeamRecentMatch = {
+  date: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeGoals: number;
+  awayGoals: number;
+  /** Result from the perspective of the team this list belongs to */
+  result: "W" | "D" | "L";
 };
 
 export type TeamSnapshot = {
@@ -22,6 +78,7 @@ export type TeamSnapshot = {
   name: string;
   logo?: string;
   form: string[];
+  recentMatches?: TeamRecentMatch[];
   goalsFor: number;
   goalsAgainst: number;
   xgFor: number;
@@ -240,6 +297,16 @@ export type AnalysisResult = {
   };
   confidence: {
     score: number;
+    /** Score before mode/scenario adjustments (when preferences were applied server-side). */
+    baseScore?: number;
+    adjustments?: {
+      modelMode: string;
+      scenario: string;
+      modeDelta: number;
+      scenarioDelta: number;
+      totalDelta: number;
+      hint: string;
+    };
     penalties: Array<{ id: string; label: string; points: number }>;
   };
   riskFlags: Array<{ id: string; label: string; severity: "low" | "medium" | "high" }>;
@@ -286,6 +353,131 @@ export type AnalysisResult = {
     expectedROI: number;
     sharpeRatio: number;
   };
+  // Advanced models output (all 19 models)
+  advancedModels?: {
+    dixonColes: { rho: number; prob00: number; prob11: number; correction00: number; correction11: number };
+    hierarchical: { lambdaHome: number; lambdaAway: number; expectedTotalGoals: number; homeWin: number; draw: number; awayWin: number };
+    skellam: { mostLikelyDiff: number; expectedDiff: number; ahMinus05: { home: number; away: number }; ahMinus1: { home: number; away: number } };
+    zip: { prob00: number; drawAdjustment: number; piHome: number; piAway: number };
+    kalman: { homeAttack: number; homeDefense: number; awayAttack: number; awayDefense: number; homeTrend: string; awayTrend: string };
+    xThreat: { homeThreat: number; awayThreat: number; dominance: string; dominanceScore: number };
+    valueBets: { bestBet: { market: string; ev: number; grade: string } | null; totalPositiveEV: number; overround: number; marketEfficiency: number };
+    hawkes: { homeMomentum: number; awayMomentum: number; nextGoalIn10min: number; expectedTotalGoals: number; clusteringCoeff: number };
+    bayesian: {
+      posterior: { homeWin: number; draw: number; awayWin: number; over25: number; btts: number };
+      shift: { homeWin: number; draw: number; awayWin: number };
+      updateConfidence: number;
+      keyEvents: Array<{ event: string; minute: number; impact: number; direction: string }>;
+      xgRemaining: { home: number; away: number };
+      timeDecay: number;
+    };
+    bivariatePoisson: {
+      lambdaHome: number;
+      lambdaAway: number;
+      kappa: number;
+      homeWin: number;
+      draw: number;
+      awayWin: number;
+      covariance: number;
+    };
+    temporalBlend: {
+      recentWeight: number;
+      seasonWeight: number;
+      blendedHomeXg: number;
+      blendedAwayXg: number;
+      homeWin: number;
+      draw: number;
+      awayWin: number;
+    };
+    mlOps: {
+      runId: string;
+      schemaValid: boolean;
+      driftScore: number;
+      driftStatus: string;
+      featureCompleteness: number;
+      qualityGatePassed: boolean;
+    };
+    timeSeries: {
+      prophetTrend: number;
+      arimaHomeWin: number;
+      tftHomeWin: number;
+      nbeatsHomeWin: number;
+      sarimaHomeWin: number;
+      sarimaSeasonality: number;
+      ensembleHomeWin: number;
+      ensembleDraw: number;
+      ensembleAwayWin: number;
+    };
+    halfTime: {
+      homeWinHT: number;
+      drawHT: number;
+      awayWinHT: number;
+      expectedGoalsHT: number;
+      over05HT: number;
+    };
+    cornersEsp: {
+      expectedTotalCorners: number;
+      homeCorners: number;
+      awayCorners: number;
+      over95Corners: number;
+    };
+    cardsRisk: {
+      expectedYellows: number;
+      expectedReds: number;
+      homeCardsIndex: number;
+      awayCardsIndex: number;
+      highCardRisk: boolean;
+    };
+    xgModel: {
+      homeXg: number;
+      awayXg: number;
+      totalXg: number;
+      bttsFromXg: number;
+      engine: string;
+    };
+    explainability: {
+      topDrivers: Array<{ feature: string; impact: number }>;
+      method: string;
+      dominantOutcome: string;
+    };
+    featureEngineering: {
+      rollingFeatureCount: number;
+      tsfreshProxyScore: number;
+    };
+    autoMl: {
+      championModel: string;
+      engines: string[];
+      optunaEnabled: boolean;
+      randomForestEnabled: boolean;
+    };
+    causalSurvival: {
+      gnnDelta: number;
+      causalLift: number;
+      survivalProbNoGoal60: number;
+      medianMinutesToNextGoal: number;
+    };
+    quantumOptimizer: {
+      method: string;
+      optimalExposure: number;
+      energy: number;
+      topMarket: string | null;
+    };
+    /** Which sections were computed by the Python ml-service vs TS fallback */
+    modelSources?: {
+      timeSeries?: string;
+      bivariatePoisson?: string;
+      temporalBlend?: string;
+      mlOps?: string;
+      causalSurvival?: string;
+      quantumOptimizer?: string;
+      halfTime?: string;
+      cornersEsp?: string;
+      cardsRisk?: string;
+      xgModel?: string;
+      explainability?: string;
+      pythonLibraries?: Record<string, boolean>;
+    };
+  };
 };
 
 export type DeepAnalysisResult = Omit<AnalysisResult, 'radar'> & {
@@ -297,6 +489,11 @@ export type DeepAnalysisResult = Omit<AnalysisResult, 'radar'> & {
     awayWinDist: number[];
     over25Confidence: number;
     sharpRatio: number;
+    hybridMix?: {
+      poissonPct: number;
+      heavyTailPct: number;
+    };
+    topScorelines?: Array<{ score: string; probability: number }>;
   };
   heavyTail: {
     distribution: "t-student";
@@ -335,4 +532,27 @@ export type DeepAnalysisResult = Omit<AnalysisResult, 'radar'> & {
     confidence: number;
   }>;
   aiPrompt: string;
+};
+
+export type { AnalysisPipelineStatus, AnalysisPipelineLayer, AnalysisPipelineTier } from "./analysis-pipeline";
+
+export type MatchAnalysisResponse = {
+  fixture: Fixture;
+  analysis: AnalysisResult;
+  lineups?: unknown[];
+  events?: unknown[];
+  statistics?: unknown[];
+  mlPrediction?: {
+    prediction?: string;
+    confidence?: number;
+    probabilities?: {
+      ensemble?: Record<string, number>;
+    };
+    models_used?: string[];
+    source?: string;
+    shap?: {
+      top_features?: Array<{ feature: string; impact: number }>;
+    };
+  } | null;
+  analysisPipeline?: import("./analysis-pipeline").AnalysisPipelineStatus;
 };

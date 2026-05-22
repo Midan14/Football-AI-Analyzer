@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 import { existsSync } from "fs";
-import { cache, cacheKeys } from "@/lib/cache";
+import { cache } from "@/lib/cache";
 import { captureException } from "@/lib/sentry";
 import { prisma } from "@/lib/db";
 
@@ -15,7 +15,6 @@ export type TrainingStatus = {
 
 const PYTHON_PATH = process.env.PYTHON_PATH || "python3";
 const TRAIN_SCRIPT = process.env.ML_TRAIN_SCRIPT || "ml/train.py";
-const PREDICT_SCRIPT = process.env.ML_PREDICT_SCRIPT || "ml/predict.py";
 
 const STATUS_KEY = "ml:training:status";
 

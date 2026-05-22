@@ -16,9 +16,11 @@ const limit = Number(args.find((a) => a.startsWith("--limit="))?.split("=")[1] ?
 const provider = getDataProvider();
 
 async function main() {
-  console.log(`[Extractor] League ${leagueId} · Season ${season} · Limit ${limit}`);
+  const today = new Date();
+  const dateStr = today.toISOString().slice(0, 10);
+  console.log(`[Extractor] League ${leagueId} · Season ${season} · Limit ${limit} · Date ${dateStr}`);
 
-  const fixtures = await provider.getFixtures({ leagueId });
+  const fixtures = await provider.getFixtures({ leagueId, date: dateStr });
   const selected = fixtures.slice(0, limit);
 
   let inserted = 0;
@@ -90,11 +92,11 @@ async function main() {
           refereeHomeBias: f.referee?.homeBias ?? 0,
           refereeAvgPenalties: f.referee?.avgPenalties ?? 0.2,
           refereeStrictness: f.referee?.strictness ?? "medium",
-          homeWinOdds: f.market.homeWinOdds || null,
-          drawOdds: f.market.drawOdds || null,
-          awayWinOdds: f.market.awayWinOdds || null,
-          over25Odds: f.market.over25Odds || null,
-          bttsYesOdds: f.market.bttsYesOdds || null,
+          homeWinOdds: full.market.homeWinOdds || null,
+          drawOdds: full.market.drawOdds || null,
+          awayWinOdds: full.market.awayWinOdds || null,
+          over25Odds: full.market.over25Odds || null,
+          bttsYesOdds: full.market.bttsYesOdds || null,
           actualHomeGoals: full.result.homeGoals,
           actualAwayGoals: full.result.awayGoals,
           actualResult:

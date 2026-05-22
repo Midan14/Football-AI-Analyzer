@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { AlertTriangle, TrendingUp, Shield, Bell, Zap, Target, Activity, Filter } from "lucide-react";
+import { AlertTriangle, TrendingUp, Shield, Bell, Zap, Activity, Filter } from "lucide-react";
 import type { Fixture, AnalysisResult } from "@/shared/domain";
+import { useDashboardSummary } from "@/frontend/hooks/use-dashboard-summary";
 
 type Alert = {
   id: string;
@@ -32,13 +33,18 @@ export function AlertsView({
   fixture,
   analysis,
   fixtures,
+  selectedDate,
+  selectedLeague,
   onOpenFixture,
 }: {
   fixture?: Fixture;
   analysis: AnalysisResult | null;
   fixtures?: Fixture[];
+  selectedDate: string;
+  selectedLeague?: string;
   onOpenFixture: (fixture: Fixture) => void;
 }) {
+  const { data: daySummary } = useDashboardSummary(selectedDate, selectedLeague);
   const [typeFilter, setTypeFilter] = useState<"all" | Alert["type"]>("all");
   const [severityFilter, setSeverityFilter] = useState<"all" | Alert["severity"]>("all");
   const [backendAlerts, setBackendAlerts] = useState<BackendAlert[]>([]);
@@ -74,10 +80,27 @@ export function AlertsView({
     }));
   }, [backendAlerts, fixture]);
 
-  // Generate alerts from ALL fixtures of the day
   const allAlerts = useMemo(() => {
     const alerts: Alert[] = [];
     const fixtureList = fixtures ?? (fixture ? [fixture] : []);
+    const fixtureById = new Map(fixtureList.map((f) => [f.id, f]));
+
+    for (const insight of daySummary?.insights ?? []) {
+      if (insight.topEdge < 5) continue;
+      const f = fixtureById.get(insight.fixtureId);
+      if (!f) continue;
+      alerts.push({
+        id: `${f.id}-summary-value-${insight.market}`,
+        type: "value",
+        severity: insight.topEdge >= 10 ? "high" : "medium",
+        title: `Modelo: edge en ${insight.market}`,
+        description: `${f.home.name} vs ${f.away.name} · Edge +${insight.topEdge.toFixed(1)}% · Confianza ${Math.round(insight.confidence)}/100 · Riesgo ${insight.riskLevel}`,
+        fixture: f,
+        market: insight.market,
+        edge: insight.topEdge,
+        confidence: insight.confidence,
+      });
+    }
 
     for (const f of fixtureList) {
       // Risk alerts from coverage
@@ -198,7 +221,7 @@ export function AlertsView({
       const sev = { high: 3, medium: 2, low: 1 };
       return sev[b.severity] - sev[a.severity];
     });
-  }, [fixtures, fixture, analysis, backendMapped]);
+  }, [fixtures, fixture, analysis, backendMapped, daySummary?.insights]);
 
   // Filter
   const filteredAlerts = useMemo(() => {
@@ -229,7 +252,10 @@ export function AlertsView({
       <article className="alerts-header">
         <div>
           <h2><Bell size={22} /> Centro de Alertas</h2>
-          <p>Monitoreo de riesgos, valor detectado y eventos en vivo para todos los partidos del día.</p>
+          <p>
+            Cobertura heurística de la jornada (cuotas, alineaciones, en vivo) más señales del escaneo
+            del modelo. Las alertas personalizadas del backend aplican al partido seleccionado.
+          </p>
         </div>
         <div className="alerts-stats">
           {alertsLoading && <span className="alerts-loading">Cargando alertas...</span>}

@@ -30,7 +30,7 @@ Ver [SETUP.md](./SETUP.md) para configuración detallada de:
 npm run dev
 ```
 
-Abrir `http://localhost:3000`.
+Abrir `http://localhost:3001` (puerto definido en `npm run dev`).
 
 ---
 
@@ -55,6 +55,7 @@ Abrir `http://localhost:3000`.
 - ✅ Rate limiting por usuario/endpoint
 - ✅ Error handling centralizado
 - ✅ Logging con Sentry
+- ✅ Endpoints pesados protegidos por sesión y límites de uso
 
 ### 🚀 Performance
 - ✅ Caché con Redis
@@ -86,7 +87,11 @@ GET  /api/auth/profile                      # Perfil del usuario
 
 ```
 GET  /api/analyze/:fixtureId                # Análisis de partido
+     ?modelMode=Conservador|Balanceado|Agresivo
+     &scenario=base|lineups|rotation|weather
+     &refresh=1                              # Forzar recálculo (omitir caché)
 GET  /api/deep-analyze/:fixtureId           # Análisis profundo de partido
+DELETE /api/analyze/:fixtureId              # Limpiar caché y recalcular análisis
 POST /api/predictions                       # Crear predicción
 GET  /api/predictions                       # Listar predicciones
 PATCH /api/predictions/:id                  # Actualizar resultado
@@ -100,6 +105,8 @@ DELETE /api/user/watchlist/:fixtureId       # Remover de watchlist
 
 ```
 GET /api/cron/resolve-predictions           # Cron con Authorization: Bearer CRON_SECRET
+GET /api/cron/ml-retrain                    # Cron con x-cron-secret o ?secret=CRON_SECRET
+POST /api/ml/train                          # Entrenamiento ML, solo ADMIN
 GET /api/health                             # Healthcheck de Postgres, Redis y proveedor de datos
 GET /api/openapi                            # Especificación OpenAPI
 ```
@@ -135,7 +142,7 @@ src/
 │   ├── cache.ts                # Caché Redis
 │   └── rate-limit.ts           # Rate limiting
 ├── shared/                      # Tipos compartidos
-└── middleware.ts                # Next.js middleware
+└── proxy.ts                     # Protección de rutas (auth JWT en edge)
 ```
 
 ---
@@ -167,7 +174,16 @@ npm run lint
 
 # Watch mode
 npm run test:watch
+
+# E2E (Playwright): login → partido → análisis → ajustes modo/escenario
+# Requiere Postgres con usuario semilla: npm run db:seed
+npm run test:e2e:install
+npm run test:e2e
 ```
+
+Variables opcionales E2E: `E2E_USER_EMAIL`, `E2E_USER_PASSWORD`, `E2E_FIXTURE_ID`, `E2E_BASE_URL`, `E2E_SKIP_WEB_SERVER`.
+
+En CI (GitHub Actions), el job `e2e` levanta Postgres, aplica schema, ejecuta seed y corre Playwright con `DATA_PROVIDER=demo`.
 
 ---
 
@@ -197,9 +213,10 @@ El fallback automático a datos demo queda deshabilitado en producción para no
 ocultar fallos del proveedor real. Mantén `DATA_PROVIDER=demo` solo en local,
 tests o demos controladas.
 
-Por rendimiento, el tablero de fixtures no precarga cuotas por fecha salvo que
-`API_FOOTBALL_PREFETCH_FIXTURE_ODDS=true`. El análisis de un partido sí consulta
-las cuotas exactas bajo demanda.
+El tablero de fixtures **precarga cuotas 1X2** desde API-Football por defecto
+(paginación amplia + fallback por partido). Para desactivarlo:
+`API_FOOTBALL_PREFETCH_FIXTURE_ODDS=false`. El Match Center sigue consultando
+cuotas exactas bajo demanda si faltan en el listado.
 
 ---
 
@@ -218,7 +235,15 @@ La app **NO presenta apuestas como seguras**. El motor reporta:
 ## 🛠️ Tech Stack
 
 - **Framework**: Next.js 16 + React 19
-- **Auth**: NextAuth.js v5
+
+## 🤖 Alcance de IA
+
+La capa predictiva actual es estadística/ML: ensemble TypeScript, modelos de
+probabilidad y entrenamiento Python (CatBoost, XGBoost, LightGBM). No hay una
+integración LLM/OpenAI activa por defecto; una futura capa LLM puede añadirse
+para explicaciones tácticas, scouting textual o reportes narrativos sin reemplazar
+el motor predictivo.
+- **Auth**: NextAuth.js v4 (Credentials + OAuth)
 - **Base de datos**: PostgreSQL + Prisma ORM
 - **Validación**: Zod
 - **Styling**: Tailwind CSS

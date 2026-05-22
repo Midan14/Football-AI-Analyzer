@@ -144,9 +144,30 @@ export const cacheKeys = {
   countries: () => "football:countries",
   leagues: (countryId: string) => `football:leagues:${countryId}`,
   fixtures: (leagueId: string, date?: string) =>
-    `football:fixtures:${leagueId}:${date || "all"}`,
+    `football:fixtures:v2:${leagueId}:${date || "all"}`,
+  fixturesRange: (
+    leagueId: string,
+    countryId: string,
+    from: string,
+    to: string,
+    includeFixtures: boolean
+  ) =>
+    `football:fixtures:range:v1:${leagueId}:${countryId}:${from}:${to}:${includeFixtures ? "fx" : "count"}`,
+  fixtureEdgeHints: (leagueId: string, countryId: string, date: string) =>
+    `football:fixtures:edge-hints:v1:${leagueId}:${countryId}:${date}`,
+  leagueCoverage: (leagueId: string, countryId: string) =>
+    `football:leagues:coverage:v1:${leagueId}:${countryId}`,
+  leagueStandings: (leagueId: string, countryId: string, limit: number) =>
+    `football:leagues:standings:v1:${leagueId}:${countryId}:${limit}`,
+  leagueStats: (leagueId: string, date: string, windowDays: number) =>
+    `football:leagues:stats:v1:${leagueId}:${date}:${windowDays}`,
+  liveFixtures: () => "football:live:fixtures:v1",
+  liveDetail: (fixtureId: string) => `football:live:detail:v1:${fixtureId}`,
+  oddsByDate: (leagueId: string, date: string) =>
+    `football:odds-by-date:v2:${leagueId}:${date}`,
   fixture: (fixtureId: string) => `football:fixture:${fixtureId}`,
-  analysis: (fixtureId: string) => `football:analysis:${fixtureId}`,
+  analysis: (fixtureId: string, modelMode = "Balanceado", scenario = "base") =>
+    `football:analysis:v2:${fixtureId}:${modelMode}:${scenario}`,
   deepAnalysis: (fixtureId: string) => `football:deep-analysis:${fixtureId}`,
   user: (userId: string) => `user:${userId}`,
   userWatchlist: (userId: string) => `user:${userId}:watchlist`,

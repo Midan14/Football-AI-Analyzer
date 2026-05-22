@@ -1,18 +1,48 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, CheckCircle } from "lucide-react";
-import { getPredictionHistory, getPredictionStats } from "@/frontend/lib/prediction-history";
 import { parseResultsCSV } from "@/frontend/lib/import-csv";
 import { usePredictionFilters } from "@/frontend/hooks/use-prediction-filters";
-import { resolvePredictions, syncPredictionResultsFromBackend } from "@/frontend/lib/predictions-api";
+import {
+  fetchPredictionRecordsForDisplay,
+  resolvePredictions,
+} from "@/frontend/lib/predictions-api";
 
 export function PredictionHistoryView({ addToast }: { addToast: (message: string, type: "success" | "error" | "warning" | "info") => void }) {
-  const [history, setHistory] = useState(() => getPredictionHistory());
-  const [resolving, setResolving] = useState(false);
-  const [syncing, setSyncing] = useState(false);
+  const queryClient = useQueryClient();
+  const {
+    data: history = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ["predictions", "display"],
+    queryFn: fetchPredictionRecordsForDisplay,
+    staleTime: 30_000,
+  });
 
-  const stats = getPredictionStats();
+  const stats = {
+    total: history.length,
+    withResult: history.filter((p) => p.result).length,
+    won: history.filter((p) => p.result?.predictionWon).length,
+    lost: history.filter((p) => !p.result?.predictionWon && p.result).length,
+    winRate:
+      history.filter((p) => p.result).length > 0
+        ? (history.filter((p) => p.result?.predictionWon).length /
+            history.filter((p) => p.result).length) *
+          100
+        : 0,
+    totalProfit: history.reduce((sum, p) => sum + (p.result?.profit ?? 0), 0),
+    avgProfit:
+      history.filter((p) => p.result).length > 0
+        ? history.reduce((sum, p) => sum + (p.result?.profit ?? 0), 0) /
+          history.filter((p) => p.result).length
+        : 0,
+  };
+
   const {
     filtered,
     leagues,
@@ -29,8 +59,9 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
   } = usePredictionFilters(history);
 
   const refresh = useCallback(() => {
-    setHistory(getPredictionHistory());
-  }, []);
+    void queryClient.invalidateQueries({ queryKey: ["predictions", "display"] });
+    void refetch();
+  }, [queryClient, refetch]);
 
   const handleImportCSV = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -46,11 +77,12 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
     event.target.value = "";
   };
 
+  const [resolving, setResolving] = useState(false);
+
   const handleResolve = async () => {
     setResolving(true);
     try {
       const summary = await resolvePredictions();
-      await syncPredictionResultsFromBackend();
       refresh();
       addToast(
         `${summary.resolved} predicciones resueltas · ${summary.skipped} omitidas`,
@@ -63,23 +95,28 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
     }
   };
 
-  const handleSync = async () => {
-    setSyncing(true);
-    try {
-      const { updated, skipped } = await syncPredictionResultsFromBackend();
-      refresh();
-      addToast(
-        `${updated} resultados sincronizados · ${skipped} omitidos`,
-        updated > 0 ? "success" : "info"
-      );
-    } catch (err) {
-      addToast(err instanceof Error ? err.message : "Error al sincronizar", "error");
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   const hasOpenPredictions = history.some((p) => !p.result);
+
+  if (isLoading) {
+    return (
+      <section className="view-workspace">
+        <div className="empty-state large">Cargando predicciones...</div>
+      </section>
+    );
+  }
+
+  if (isError) {
+    return (
+      <section className="view-workspace">
+        <div className="error-banner" role="alert">
+          <span>{error instanceof Error ? error.message : "Error al cargar predicciones"}</span>
+          <button type="button" onClick={() => void refetch()}>
+            Reintentar
+          </button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="view-workspace">
@@ -87,7 +124,10 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
         <div>
           <span>Historial</span>
           <h2>Predicciones guardadas</h2>
-          <p>Seguimiento de decisiones del modelo: picks, confianza, stake y resultados.</p>
+          <p>
+            Predicciones guardadas desde Match Center en tu cuenta (API). Importa CSV solo para
+            actualizar resultados locales legacy.
+          </p>
         </div>
         <div className="hero-metrics">
           <strong>{stats.total}</strong><span>total</span>
@@ -111,7 +151,7 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
           </label>
           <label className="filter-field">
             <span>Resultado</span>
-            <select value={resultFilter} onChange={(e) => setResultFilter(e.target.value as any)}>
+            <select value={resultFilter} onChange={(e) => setResultFilter(e.target.value as "all" | "won" | "lost" | "pending")}>
               <option value="all">Todos</option>
               <option value="won">Ganadas</option>
               <option value="lost">Perdidas</option>
@@ -148,12 +188,11 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
           </button>
           <button
             className="qa-btn-deep"
-            onClick={handleSync}
-            disabled={syncing}
-            style={{ opacity: syncing ? 0.6 : 1 }}
+            onClick={() => refresh()}
+            style={{ opacity: 1 }}
           >
             <RefreshCw size={16} />
-            {syncing ? "Sincronizando..." : "Sincronizar resultados"}
+            Actualizar lista
           </button>
         </div>
       </article>
@@ -183,7 +222,7 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
         </div>
         <div className="prediction-list">
           {filtered.map((item) => (
-            <div className="prediction-row" key={item.fixtureId}>
+            <div className="prediction-row" key={`${item.fixtureId}-${item.createdAt}`}>
               <div className="prediction-main">
                 <strong>{item.homeTeam} vs {item.awayTeam}</strong>
                 <span>{item.leagueName} · {new Date(item.kickoff).toLocaleDateString("es-ES")}</span>

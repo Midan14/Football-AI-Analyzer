@@ -105,7 +105,6 @@ export function skellamModel(xgHome: number, xgAway: number): SkellamResult {
   }
 
   // Asian Handicap calculations
-  const probHomeWinByExactly = (n: number) => goalDiffProbs[String(n)] || 0;
   const probHomeLead = (minDiff: number) => {
     let sum = 0;
     for (let d = minDiff; d <= 5; d++) sum += (goalDiffProbs[String(d)] || 0);

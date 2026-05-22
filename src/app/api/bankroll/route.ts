@@ -12,7 +12,7 @@ const UpdateBankrollSchema = z.object({
  * GET /api/bankroll
  * Returns current bankroll and metrics
  */
-export const GET = withErrorHandling(async (request: NextRequest) => {
+export const GET = withErrorHandling(async (_request: NextRequest) => {
   const session = await auth();
   if (!session?.user?.id) return errorResponse(Errors.UNAUTHORIZED);
 

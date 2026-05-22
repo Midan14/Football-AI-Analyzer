@@ -11,7 +11,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
  * GET /api/predictions
  * Get user's predictions
  */
-export const GET = withErrorHandling(async (request: NextRequest) => {
+export const GET = withErrorHandling(async (_request: NextRequest) => {
   const session = await auth();
 
   if (!session?.user?.id) {

@@ -9,9 +9,9 @@ const faqs: FAQItem[] = [
   { q: "¿Cómo selecciono un partido?", a: "Usa los selectores en la barra superior: País → Liga → Fecha → Partido. También puedes buscar un equipo directamente con el buscador o navegar desde el Calendario." },
   { q: "¿Qué significa el Edge?", a: "Edge = Probabilidad del modelo - Probabilidad implícita del mercado. Un edge positivo (+5%) significa que el modelo cree que el mercado subestima esa probabilidad. Es donde hay valor para apostar." },
   { q: "¿Cómo funciona el Ensemble?", a: "El Ensemble combina 4 modelos (Poisson, Binomial Negativa, ELO, Forma) con pesos dinámicos. Cada modelo aporta su predicción y el resultado final es un promedio ponderado. Mayor acuerdo entre modelos = mayor confianza." },
-  { q: "¿Qué es Kelly Criterion?", a: "Es una fórmula matemática que calcula el stake óptimo basado en tu edge y bankroll. Usamos Kelly Fraccional (35%) para ser conservadores. Nunca recomienda más del 5% del bankroll en un solo mercado." },
+  { q: "¿Qué es Kelly Criterion?", a: "Es una fórmula matemática que calcula el stake óptimo basado en tu edge y bankroll. Usamos Kelly Fraccional (25%) para ser conservadores. Nunca recomienda más del 1% del bankroll en un solo mercado." },
   { q: "¿Por qué la confianza es baja para algunas ligas?", a: "La confianza se penaliza cuando faltan datos: sin cuotas reales (-8pts), sin alineaciones (-5pts), sin xG (-4pts), liga de baja cobertura (-15pts). Ligas elite tienen más datos = mayor confianza. Revisa las penalizaciones en el panel de cada partido." },
-  { q: "¿Los datos son en tiempo real?", a: "Para partidos en vivo, los datos se actualizan cada 15 segundos. Para pre-match, cada 60 segundos. Las cuotas vienen del proveedor de datos configurado (API-Football, Sportmonks o scraping). En modo demo se usan datos de referencia." },
+  { q: "¿Los datos son en tiempo real?", a: "En Partidos en Vivo la lista se actualiza cada 10 segundos. En el tablero del día, los marcadores en vivo se refrescan cada 15 segundos cuando estás en vistas que muestran el calendario. Los partidos programados se recargan cada ~30–60 segundos. Las cuotas se cargan en segundo plano tras los fixtures. En modo demo se usan datos de referencia." },
   { q: "¿Cómo agrego equipos favoritos?", a: "Haz clic en la ⭐ junto al nombre de un equipo en el Match Center o Partidos en Vivo. Los equipos favoritos aparecen en la Watchlist y activan alertas sonoras para goles." },
   { q: "¿Puedo exportar el análisis?", a: "Sí. Desde la vista Informes o Modelos AI puedes exportar un PDF completo con todas las probabilidades, recomendaciones, Kelly y tabla de valor." },
   { q: "¿Qué significa APOSTAR/PRECAUCIÓN/NO APOSTAR?", a: "APOSTAR (≥68% confianza): el modelo tiene suficiente certeza. PRECAUCIÓN (52-67%): hay valor pero con riesgo. NO APOSTAR (<52%): datos insuficientes o riesgo alto." },
@@ -20,10 +20,10 @@ const faqs: FAQItem[] = [
 
 const guides = [
   { icon: Globe2, title: "Dashboard Global", desc: "Resumen del día con todos los partidos. Click en cualquier partido para abrir el Match Center." },
-  { icon: Target, title: "Match Center", desc: "Análisis completo de un partido: 16 modelos, alineaciones, eventos, estadísticas, Kelly y recomendación." },
+  { icon: Target, title: "Match Center", desc: "Análisis completo de un partido: modelos auditados, alineaciones, eventos, estadísticas, Kelly y recomendación." },
   { icon: BarChart3, title: "Calendario", desc: "Navega por fechas pasadas y futuras. Calendario mensual + vista multi-día de próximos partidos." },
   { icon: Globe2, title: "Ligas y Países", desc: "Explora 171 países y sus ligas. Ve la cobertura real de datos para cada liga." },
-  { icon: Activity, title: "Partidos en Vivo", desc: "Seguimiento en tiempo real con eventos, estadísticas y alertas sonoras para equipos favoritos." },
+  { icon: Activity, title: "Partidos en Vivo", desc: "Seguimiento en tiempo real (polling cada 10s) con eventos, estadísticas y alertas sonoras para equipos favoritos." },
   { icon: Brain, title: "Modelos AI", desc: "Laboratorio de modelos: Ensemble, Comparación visual, Simulación interactiva de xG, Kelly y Pipeline." },
   { icon: Zap, title: "Análisis Profundo", desc: "Monte Carlo, Teoría de Juegos, Black Swan, Psicología, Árbitro, Fatiga y Insights accionables." },
   { icon: FileText, title: "Historial de Análisis", desc: "Todos los análisis ejecutados guardados en la base de datos. Re-analiza partidos pasados." },
@@ -42,7 +42,7 @@ export function HelpView() {
       <article className="help-header">
         <div>
           <h2><HelpCircle size={22} /> Centro de Ayuda</h2>
-          <p>Football AI Analyzer · 16 modelos de predicción · Motor v2.4.1</p>
+          <p>Football AI Analyzer · Modelos auditados · Motor v2.4.1</p>
         </div>
       </article>
 
@@ -90,7 +90,7 @@ export function HelpView() {
           <div className="help-model-group">
             <h4>Análisis profundo</h4>
             <ol start={12}>
-              <li><b>Monte Carlo</b> — 1000 simulaciones</li>
+              <li><b>Monte Carlo híbrido</b> — 50k simulaciones por defecto</li>
               <li><b>t-Student Heavy Tail</b> — Black Swan events</li>
               <li><b>Teoría de Juegos</b> — Nash Equilibrium</li>
               <li><b>Análisis Psicológico</b> — Choking, motivación</li>

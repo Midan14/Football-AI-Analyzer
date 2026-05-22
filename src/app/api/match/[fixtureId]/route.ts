@@ -26,11 +26,10 @@ export const GET = withErrorHandling(async (request: NextRequest, context: { par
   }
 
   try {
-    const data = await getMatch(fixtureId);
-    // Dynamic cache: 15s for live, 60s for others
-    const ttl = (data as any)?.status === "live" ? 15 : 60;
-    await cache.set(cacheKeys.fixture(fixtureId), data, ttl);
-    return successResponse(data);
+    const { match } = await getMatch(fixtureId);
+    const ttl = match.status === "live" ? 15 : 60;
+    await cache.set(cacheKeys.fixture(fixtureId), match, ttl);
+    return successResponse(match);
   } catch (error) {
     captureException(error, { endpoint: "/api/match/:fixtureId", fixtureId });
     return errorResponse(Errors.SERVICE_UNAVAILABLE);

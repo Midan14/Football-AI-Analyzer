@@ -129,6 +129,10 @@ function enhanceWithLiveStats(
     enhanced.zones.middleThird = Math.min(100, base.zones.middleThird * 0.4 + possession * 0.8);
   }
 
+  if (passAccuracy > 0) {
+    enhanced.zones.finalThird = Math.min(100, enhanced.zones.finalThird + passAccuracy * 0.05);
+  }
+
   if (corners > 0) {
     enhanced.setPiece = Math.min(100, base.setPiece * 0.6 + corners * 8);
   }

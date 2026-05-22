@@ -1,3 +1,4 @@
+import type { LucideIcon } from "lucide-react";
 import {
   Bell,
   Brain,
@@ -16,23 +17,47 @@ import {
   Zap,
 } from "lucide-react";
 
-export const navItems = [
-  ["Dashboard Global", TrendingUp],
-  ["Match Center", Globe2],
-  ["Calendario", CalendarDays],
-  ["Ligas y Países", Layers3],
-  ["Partidos en Vivo", Play],
-  ["Modelos AI", LineChart],
-  ["Análisis Profundo", Brain],
-  ["Oportunidades", Zap],
-  ["Historial de Análisis", History],
-  ["Mis Predicciones", ListChecks],
-  ["Alertas", Bell],
-  ["Watchlist", Star],
-  ["Informes", ClipboardList],
-  ["Configuración", Settings],
-  ["Ayuda", CircleHelp],
+export const navSections = [
+  {
+    label: "Explorar",
+    items: [
+      ["Dashboard Global", TrendingUp],
+      ["Match Center", Globe2],
+      ["Calendario", CalendarDays],
+      ["Ligas y Países", Layers3],
+      ["Partidos en Vivo", Play],
+    ],
+  },
+  {
+    label: "Análisis",
+    items: [
+      ["Modelos AI", LineChart],
+      ["Análisis Profundo", Brain],
+      ["Oportunidades", Zap],
+      ["Historial de Análisis", History],
+    ],
+  },
+  {
+    label: "Cuenta",
+    items: [
+      ["Mis Predicciones", ListChecks],
+      ["Alertas", Bell],
+      ["Watchlist", Star],
+      ["Informes", ClipboardList],
+      ["Configuración", Settings],
+      ["Ayuda", CircleHelp],
+    ],
+  },
 ] as const;
+
+export type NavItem = readonly [string, LucideIcon];
+
+/** Flat list for backwards compatibility */
+export const navItems: NavItem[] = [
+  ...navSections[0].items,
+  ...navSections[1].items,
+  ...navSections[2].items,
+];
 
 export const riskRows = [
   ["Alta variabilidad", "Resultados volátiles por rotación de jugadores.", "ALTO", "high", "▲"],
