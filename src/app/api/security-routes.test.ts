@@ -256,6 +256,9 @@ describe("API security hardening", () => {
     vi.doMock("@/auth", () => ({
       auth: vi.fn(async () => ({ user: { id: "user-1", role: "USER" } })),
     }));
+    vi.doMock("@/backend/lib/odds/bookmaker-odds-service", () => ({
+      getFixtureBookmakerOdds: vi.fn(async () => ({})),
+    }));
     vi.doMock("@/backend/server/football/football-service", () => ({
       analyzeMatch: vi.fn(async () => ({
         fixture: {
