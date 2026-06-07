@@ -158,7 +158,7 @@ export function DashboardTopbar({
         </strong>
         <span>{loading ? "Actualizando datos..." : statusMessage}</span>
       </div>
-      <button className="refresh" aria-label="refrescar" onClick={onRefresh}>
+      <button className="refresh" aria-label="Refrescar dashboard" onClick={onRefresh}>
         <RefreshCw size={28} />
       </button>
     </header>

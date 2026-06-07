@@ -30,20 +30,24 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
 
   const { leagueId: validatedLeagueId, date: validatedDate } = validation.data;
 
-  const cacheKey = `${cacheKeys.fixtures(validatedLeagueId || "all", validatedDate)}:v3`;
+  const cacheKey = `${cacheKeys.fixtures(validatedLeagueId || "all", validatedDate)}:v4`;
   const cached = await cache.get<{
     fixtures?: unknown[];
     dataSource?: string;
   }>(cacheKey);
   const cacheIsDemo =
     cached?.dataSource === "demo-fallback" && getActiveProviderName() === "api-football";
-  if (
-    cached &&
-    Array.isArray(cached.fixtures) &&
-    cached.fixtures.length > 0 &&
-    !cacheIsDemo
-  ) {
-    return successResponse(cached);
+  // Serve cached responses when valid: either real fixtures, or a short-lived
+  // quota/rate-limit marker so the UI keeps the proper banner without
+  // re-hitting the API during the throttle window.
+  if (cached && Array.isArray(cached.fixtures) && !cacheIsDemo) {
+    if (
+      cached.fixtures.length > 0 ||
+      cached.dataSource === "api-football-quota" ||
+      cached.dataSource === "api-football-rate-limit"
+    ) {
+      return successResponse(cached);
+    }
   }
 
   try {
@@ -52,26 +56,25 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
       date: validatedDate,
     });
 
-    const oddsCount = data.fixtures.filter((fixture) => fixture.market.homeWinOdds > 0).length;
-    const skipOddsCache =
-      getActiveProviderName() === "api-football" &&
-      process.env.API_FOOTBALL_PREFETCH_FIXTURE_ODDS !== "false" &&
-      data.fixtures.length > 0 &&
-      oddsCount === 0;
-
+    // Cache the fixture list whenever we got real data. Odds come from
+    // /api/odds/by-date (separate endpoint with its own cache), so the
+    // absence of odds here must NOT block the fixture cache — otherwise
+    // every render hits API-Football and burns the per-minute quota.
     if (
-      !skipOddsCache &&
       data.fixtures.length > 0 &&
       data.dataSource !== "demo-fallback" &&
-      data.dataSource !== "api-football-quota"
+      data.dataSource !== "api-football-quota" &&
+      data.dataSource !== "api-football-rate-limit"
     ) {
       const hasLive = data.fixtures.some((fixture) => fixture.status === "live");
       const cacheTtl = hasLive ? 10 : 30;
-      await cache.set(
-        cacheKey,
-        data,
-        cacheTtl
-      );
+      await cache.set(cacheKey, data, cacheTtl);
+    } else if (data.dataSource === "api-football-quota") {
+      // Daily quota exhausted — cache briefly so we don't hammer the API.
+      await cache.set(cacheKey, data, 60);
+    } else if (data.dataSource === "api-football-rate-limit") {
+      // Very short cache for transient throttle (clears in seconds).
+      await cache.set(cacheKey, data, 5);
     }
 
     return successResponse(data);

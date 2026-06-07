@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from features import extract_features, FEATURE_COLUMNS
 from extended_models import library_status, run_extended_models, run_temporal_blend, run_bivariate_poisson
+from hybrid_pipeline import get_hybrid_pipeline
 
 app = FastAPI(title="Football AI ML Service", version="1.1.0")
 
@@ -140,9 +141,27 @@ class ExtendedPredictRequest(BaseModel):
     value_edges: Optional[list] = None
 
 
+class HybridPredictResponse(BaseModel):
+    pipeline: str
+    ready: bool
+    quality_gate_passed: bool = False
+    dixon_coles: Dict
+    probabilities: Dict[str, float]
+    over_25: Dict[str, float]
+    over_35: Dict[str, float]
+    btts: Dict[str, float]
+    markets: Dict
+    confidence: float
+    models_used: list
+    feature_importance: Optional[Dict[str, float]] = None
+    shap: Optional[Dict] = None
+    metadata: Optional[Dict] = None
+
+
 @app.get("/health")
 def health():
     libs = library_status()
+    hybrid = get_hybrid_pipeline()
     return {
         "status": "ok",
         "models_loaded": list(models.keys()),
@@ -150,7 +169,23 @@ def health():
         "metadata": metadata,
         "extended_libraries": libs,
         "extended_ready": any(libs.values()),
+        "hybrid_pipeline_ready": hybrid.ready,
+        "hybrid_metadata": hybrid.metadata or None,
     }
+
+
+@app.post("/predict/hybrid", response_model=HybridPredictResponse)
+def predict_hybrid(request: PredictRequest):
+    """Dixon-Coles → XGBoost → unified market derivation."""
+    if not request.fixture:
+        raise HTTPException(status_code=400, detail="fixture is required for hybrid pipeline")
+
+    try:
+        pipeline = get_hybrid_pipeline()
+        result = pipeline.predict(request.fixture, request.home_stats, request.away_stats)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Hybrid pipeline failed: {e}") from e
 
 
 @app.get("/libraries")
@@ -315,16 +350,34 @@ def predict(request: PredictRequest):
         draw_probs.append(results["rf_1x2"].get("DRAW", 0.33))
         away_probs.append(results["rf_1x2"].get("AWAY_WIN", 0.33))
 
-    # Average ensemble
-    ensemble_home = np.mean(home_probs) * 100 if home_probs else 33.3
-    ensemble_draw = np.mean(draw_probs) * 100 if draw_probs else 33.3
-    ensemble_away = np.mean(away_probs) * 100 if away_probs else 33.3
+    # Average ensemble (as fraction)
+    ensemble_home = np.mean(home_probs) if home_probs else 0.333
+    ensemble_draw = np.mean(draw_probs) if draw_probs else 0.333
+    ensemble_away = np.mean(away_probs) if away_probs else 0.334
 
-    # Normalize
+    # Apply calibration if present in metadata.json
+    if metadata and "calibration" in metadata and metadata["calibration"]:
+        try:
+            params = metadata["calibration"]
+            calibrated = []
+            for i, p_val in enumerate([ensemble_home, ensemble_draw, ensemble_away]):
+                p_clipped = min(1.0 - 1e-5, max(1e-5, float(p_val)))
+                logit = np.log(p_clipped / (1.0 - p_clipped))
+                calibrated.append(1.0 / (1.0 + np.exp(params[i]["A"] * logit + params[i]["B"])))
+            
+            total_cal = sum(calibrated)
+            if total_cal > 0:
+                ensemble_home = calibrated[0] / total_cal
+                ensemble_draw = calibrated[1] / total_cal
+                ensemble_away = calibrated[2] / total_cal
+        except Exception:
+            pass
+
+    # Normalize and convert to percent
     total = ensemble_home + ensemble_draw + ensemble_away
     ensemble_home = round(ensemble_home / total * 100, 1)
     ensemble_draw = round(ensemble_draw / total * 100, 1)
-    ensemble_away = round(100 - ensemble_home - ensemble_draw, 1)
+    ensemble_away = round(100.0 - ensemble_home - ensemble_draw, 1)
 
     # Over 2.5
     over_25_prob = results.get("lightgbm_over25", {}).get("over_25", 0.5) * 100

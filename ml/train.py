@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
 ML Training Pipeline — Football AI Analyzer
+
+DEPRECATED: This PostgreSQL-backed CatBoost/XGB/LGBM trainer is legacy. The
+supported probabilistic model is the hybrid Dixon-Coles -> XGBoost pipeline in
+`ml-service/train_hybrid.py` (trained on point-in-time data from
+`ml-service/collect_data.py`, calibrated, and gated by `ml-service/backtest.py`).
+Kept for the existing /api/cron/ml-retrain Brier-gated flow only.
+
 Trains CatBoost, XGBoost, LightGBM on historical matches stored in PostgreSQL.
 Uses Optuna for hyperparameter tuning and SHAP for explainability.
 
@@ -287,7 +294,16 @@ def shap_summary(models: dict, X_sample: pd.DataFrame, output_dir: str):
             print(f"[SHAP] {name} skipped: {e}")
 
 
-def save_models(models: dict, feature_names: List[str], classes: List[str], output_dir: str):
+def compute_multiclass_brier_score(y_true, probas) -> float:
+    n_samples = len(y_true)
+    if n_samples == 0:
+        return 0.0
+    one_hot = np.zeros_like(probas)
+    one_hot[np.arange(n_samples), y_true] = 1.0
+    return float(np.mean(np.sum((probas - one_hot) ** 2, axis=1)))
+
+
+def save_models(models: dict, feature_names: List[str], classes: List[str], output_dir: str, brier_score: float = 0.0, calibration: list = None):
     os.makedirs(output_dir, exist_ok=True)
     for name, model in models.items():
         path = f"{output_dir}/{name}_1x2"
@@ -299,7 +315,13 @@ def save_models(models: dict, feature_names: List[str], classes: List[str], outp
             model.booster_.save_model(f"{path}.txt")
         print(f"[Save] {name} -> {path}")
 
-    meta = {"feature_names": feature_names, "classes": classes, "trained_at": datetime.utcnow().isoformat()}
+    meta = {
+        "feature_names": feature_names,
+        "classes": classes,
+        "trained_at": datetime.utcnow().isoformat(),
+        "brier_score": brier_score,
+        "calibration": calibration
+    }
     with open(f"{output_dir}/meta.json", "w") as f:
         json.dump(meta, f, indent=2)
 
@@ -337,17 +359,57 @@ def main():
     lgb_model, _ = train_lightgbm(X_train, y_train, X_val, y_val, args.trials)
     evaluate(lgb_model, X_test, y_test, "LightGBM", classes)
 
+    # 1. Get validation predictions
+    cb_val = cb_model.predict_proba(X_val)
+    xgb_val = xgb_model.predict_proba(X_val)
+    lgb_val = lgb_model.predict_proba(X_val)
+    ensemble_val = (cb_val + xgb_val + lgb_val) / 3
+
+    # 2. Fit Platt Scaling Calibration parameters (Logistic Regression on Log-Odds)
+    from sklearn.linear_model import LogisticRegression
+    calibration_params = []
+    for c in range(3):
+        # Log-odds representation
+        p = np.clip(ensemble_val[:, c], 1e-5, 1.0 - 1e-5)
+        logits = np.log(p / (1.0 - p)).reshape(-1, 1)
+        y_c = (y_val.values == c).astype(int)
+        
+        lr = LogisticRegression(C=1e3)
+        lr.fit(logits, y_c)
+        calibration_params.append({
+            "A": float(lr.coef_[0][0]),
+            "B": float(lr.intercept_[0])
+        })
+    print(f"[Calibration] Platt scaling coefficients computed successfully: {calibration_params}")
+
+    # 3. Test probabilities
     cb_proba = cb_model.predict_proba(X_test)
     xgb_proba = xgb_model.predict_proba(X_test)
     lgb_proba = lgb_model.predict_proba(X_test)
     ensemble_proba = (cb_proba + xgb_proba + lgb_proba) / 3
-    ensemble_pred = np.argmax(ensemble_proba, axis=1)
+
+    # Apply calibration
+    calibrated_proba = np.zeros_like(ensemble_proba)
+    for c in range(3):
+        p = np.clip(ensemble_proba[:, c], 1e-5, 1.0 - 1e-5)
+        logits = np.log(p / (1.0 - p))
+        calibrated_proba[:, c] = 1.0 / (1.0 + np.exp(calibration_params[c]["A"] * logits + calibration_params[c]["B"]))
+    
+    # Normalize row sums
+    row_sums = calibrated_proba.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1.0
+    calibrated_proba /= row_sums
+
+    ensemble_pred = np.argmax(calibrated_proba, axis=1)
     ensemble_acc = accuracy_score(y_test, ensemble_pred)
-    ensemble_ll = safe_log_loss(y_test, ensemble_proba, labels=list(range(len(classes))))
-    print(f"[Ensemble] Accuracy={ensemble_acc:.3f} · LogLoss={ensemble_ll:.4f}")
+    ensemble_ll = safe_log_loss(y_test, calibrated_proba, labels=list(range(len(classes))))
+    print(f"[Ensemble Calibrado] Accuracy={ensemble_acc:.3f} · LogLoss={ensemble_ll:.4f}")
+
+    brier_score = compute_multiclass_brier_score(y_test.values, calibrated_proba)
+    print(f"[Ensemble Calibrado] Brier Score={brier_score:.4f}")
 
     models = {"catboost": cb_model, "xgboost": xgb_model, "lightgbm": lgb_model}
-    save_models(models, ALL_FEATURES, classes, args.output)
+    save_models(models, ALL_FEATURES, classes, args.output, brier_score, calibration_params)
     shap_summary(models, X_test, args.output)
 
     print(f"\n[Done] Models saved to {args.output}")

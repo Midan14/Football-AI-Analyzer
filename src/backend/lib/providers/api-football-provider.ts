@@ -3,8 +3,36 @@ import {
   buildConfidenceImpact,
   computeCoverageScore,
 } from "@/backend/lib/leagues/league-confidence";
-import { ApiFootballQuotaError, isApiFootballQuotaError } from "@/backend/lib/providers/api-football-errors";
+import {
+  isSupportedLeagueType,
+  leagueCatalogSeasonCandidates,
+  mapApiFootballLeagueRow,
+  mergeLeagueCatalogRows,
+} from "@/backend/lib/leagues/league-enrichment";
+import {
+  ApiFootballQuotaError,
+  ApiFootballRateLimitError,
+  isApiFootballQuotaError,
+} from "@/backend/lib/providers/api-football-errors";
+import {
+  apiFootballSeasonForDate,
+  pickSeasonYearFromLeagueDetail,
+  resolveMaxFixturesPerDay,
+} from "@/backend/lib/providers/api-football-season";
 import { DemoProvider } from "@/backend/lib/providers/demo-provider";
+import {
+  buildMatchResult,
+  isSuspiciousMatchResult,
+  reconcileFixtureResult,
+  resolveApiFootballGoals,
+} from "@/backend/lib/fixtures/fixture-score-resolver";
+import {
+  applyLineupsToSquad,
+  enrichFixtureOperationalContext,
+  enrichFixtureOperationalContextAsync,
+} from "@/backend/lib/fixtures/fixture-context-enricher";
+import type { MatchEvent } from "@/shared/domain";
+import { mapApiFootballStatusShort } from "@/shared/fixture-status";
 
 const API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io";
 /** Odds prefetch is on by default; set API_FOOTBALL_PREFETCH_FIXTURE_ODDS=false to disable. */
@@ -27,6 +55,12 @@ type ApiFootballLeagueItem = {
     name: string;
     code: string | null;
   };
+  seasons?: Array<{
+    year: number;
+    start?: string;
+    end?: string;
+    current?: boolean;
+  }>;
 };
 
 type ApiFootballLeagueSeasonCoverage = {
@@ -92,6 +126,7 @@ type ApiFootballFixtureItem = {
     venue?: { id?: number; name?: string; city?: string } | null;
     status: {
       short: string;
+      long?: string | null;
       elapsed?: number | null;
     };
   };
@@ -113,6 +148,9 @@ type ApiFootballFixtureItem = {
   };
   score?: {
     halftime?: { home: number | null; away: number | null };
+    fulltime?: { home: number | null; away: number | null };
+    extratime?: { home: number | null; away: number | null };
+    penalty?: { home: number | null; away: number | null };
   };
 };
 
@@ -120,10 +158,20 @@ type ApiFootballResponse<T> = {
   response: T;
   errors?: Record<string, string | unknown>;
   results?: number;
+  paging?: { current: number; total: number };
 };
 
 function allowDemoFallback(): boolean {
-  return process.env.NODE_ENV !== "production" || process.env.ALLOW_DEMO_FALLBACK === "true";
+  // Explicit override always wins.
+  if (process.env.ALLOW_DEMO_FALLBACK === "true") return true;
+  if (process.env.ALLOW_DEMO_FALLBACK === "false") return false;
+  // Smart default: if a real API-Football key is configured, never silently
+  // degrade to demo (even in dev) — users on paid plans expect real data and
+  // would rather see a transient error/banner than fake fixtures.
+  const hasRealKey = Boolean(process.env.API_FOOTBALL_KEY?.trim());
+  if (hasRealKey) return false;
+  // No key configured → demo is fine outside production (e.g. CI, local tests).
+  return process.env.NODE_ENV !== "production";
 }
 
 type ApiFootballFixtureItemFull = ApiFootballFixtureItem & {
@@ -225,14 +273,28 @@ type ApiInjuryItem = {
   reason?: string;
 };
 
+function mapApiFootballEvents(
+  events: ApiFootballFixtureItemFull["events"]
+): MatchEvent[] {
+  return (events ?? []).map((event) => ({
+    time: event.time?.elapsed ?? 0,
+    extraTime: event.time?.extra ?? undefined,
+    team: event.team?.name ?? "",
+    teamLogo: event.team?.logo,
+    player: event.player?.name ?? "",
+    assist: event.assist?.name ?? undefined,
+    type: event.type ?? "",
+    detail: event.detail ?? "",
+  }));
+}
+
 function safeNum(v: unknown, fallback = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
 
 function mapH2HRecord(item: ApiFootballFixtureItem, leagueDefault: string): H2HRecord {
-  const homeGoals = safeNum(item.goals.home, 0);
-  const awayGoals = safeNum(item.goals.away, 0);
+  const { homeGoals, awayGoals } = resolveApiFootballGoals(item);
   return {
     date: item.fixture.date,
     home: item.teams.home.name,
@@ -315,13 +377,6 @@ function countryIdFromNameCode(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-function normalizeStatus(statusShort: string): "pre-match" | "live" | "final" {
-  const s = statusShort.toUpperCase();
-  if (["1H", "2H", "HT", "ET", "BT", "P", "LIVE"].includes(s)) return "live";
-  if (["FT", "AET", "PEN"].includes(s)) return "final";
-  return "pre-match";
-}
-
 function determineTier(leagueName: string): FixtureCoverage["tier"] {
   const name = leagueName.toLowerCase();
   const elite = [
@@ -332,6 +387,7 @@ function determineTier(leagueName: string): FixtureCoverage["tier"] {
   ];
   const standard = [
     "eredivisie", "primeira liga", "championship", "liga mx", "mls",
+    "liga mx femenil", "nwsl", "wsl", "frauen", "femenil", "femenina",
     "brasileirao", "serie b", "segunda", "2. bundesliga", "ligue 2",
     "super lig", "süper lig", "liga betplay", "liga profesional",
     "allsvenskan", "eliteserien", "toppserien", "superliga",
@@ -354,38 +410,6 @@ function determineTier(leagueName: string): FixtureCoverage["tier"] {
   if (elite.some((item) => name.includes(item))) return "elite";
   if (standard.some((item) => name.includes(item))) return "standard";
   return "low";
-}
-
-function isCalendarYearCountry(countryName?: string): boolean {
-  const country = (countryName ?? "").toLowerCase().replace(/-/g, " ");
-  return [
-    "argentina",
-    "brazil",
-    "brasil",
-    "colombia",
-    "chile",
-    "ecuador",
-    "paraguay",
-    "uruguay",
-    "peru",
-    "venezuela",
-    "united states",
-    "usa",
-    "canada",
-    "japan",
-    "korea",
-    "china",
-    "sweden",
-    "norway",
-    "finland",
-    "iceland",
-  ].some((name) => country.includes(name));
-}
-
-function apiFootballSeasonForDate(date = new Date(), countryName?: string): number {
-  const year = date.getFullYear();
-  if (isCalendarYearCountry(countryName)) return year;
-  return date.getMonth() < 6 ? year - 1 : year;
 }
 
 function fixtureQueryTimezone(): string {
@@ -442,7 +466,8 @@ function extractOddsFromBookmaker(
   bookmaker: NonNullable<ApiOddsResponse["bookmakers"]>[number],
   fallback: FixtureMarket
 ): FixtureMarket {
-  const result = { ...fallback };
+  const bookmakerName = (bookmaker.name ?? "").trim();
+  const result = { ...fallback, ...(bookmakerName ? { bookmakerName } : {}) };
   const bets = bookmaker.bets ?? [];
 
   for (const bet of bets) {
@@ -509,9 +534,10 @@ function extractBestOddsFromBookmakers(
   fallback: FixtureMarket = emptyFixtureMarket()
 ): Partial<FixtureMarket> | null {
   for (const bookmaker of bookmakers ?? []) {
+    const name = (bookmaker.name ?? "").trim();
     const market = extractOddsFromBookmaker(
       {
-        name: bookmaker.name ?? "",
+        name,
         bets: (bookmaker.bets ?? []).map((bet) => ({
           name: bet.name ?? "",
           values: bet.values,
@@ -519,9 +545,33 @@ function extractBestOddsFromBookmakers(
       },
       fallback
     );
-    if (market.homeWinOdds > 0) return market;
+    if (market.homeWinOdds > 0) return { ...market, ...(name ? { bookmakerName: name } : {}) };
   }
   return null;
+}
+
+export function extractAllBookmakerOdds(
+  bookmakers: ApiOddsDateItem["bookmakers"]
+): Record<string, FixtureMarket> {
+  const result: Record<string, FixtureMarket> = {};
+  for (const bookmaker of bookmakers ?? []) {
+    const name = (bookmaker.name ?? "").trim();
+    if (!name) continue;
+    const partial = extractOddsFromBookmaker(
+      {
+        name,
+        bets: (bookmaker.bets ?? []).map((bet) => ({
+          name: bet.name ?? "",
+          values: bet.values,
+        })),
+      },
+      emptyFixtureMarket()
+    );
+    if (partial.homeWinOdds > 0) {
+      result[name] = { ...emptyFixtureMarket(), ...partial, bookmakerName: name };
+    }
+  }
+  return result;
 }
 
 function enrichTeamWithStats(team: TeamSnapshot, stats: ApiTeamStats, side: "home" | "away"): TeamSnapshot {
@@ -573,8 +623,7 @@ const FINISHED_STATUSES = new Set(["FT", "AET", "PEN"]);
 
 function mapRecentMatch(item: ApiFootballFixtureItem, teamId: number): TeamRecentMatch {
   const isHome = item.teams.home.id === teamId;
-  const homeGoals = safeNum(item.goals.home, 0);
-  const awayGoals = safeNum(item.goals.away, 0);
+  const { homeGoals, awayGoals } = resolveApiFootballGoals(item);
   let result: TeamRecentMatch["result"] = "D";
   if (isHome) {
     if (homeGoals > awayGoals) result = "W";
@@ -595,6 +644,7 @@ function mapRecentMatch(item: ApiFootballFixtureItem, teamId: number): TeamRecen
 export class ApiFootballProvider {
   private readonly token: string;
   private readonly fallback = new DemoProvider();
+  private readonly leagueDetailCache = new Map<string, ApiFootballLeagueDetailItem>();
 
   constructor(token = process.env.API_FOOTBALL_KEY ?? "") {
     this.token = token;
@@ -604,7 +654,12 @@ export class ApiFootballProvider {
     try {
       return await op();
     } catch (err) {
+      // Never silently degrade to demo for quota or transient rate-limit
+      // errors — the caller (route / service) decides how to surface those.
       if (isApiFootballQuotaError(err)) {
+        throw err;
+      }
+      if (err instanceof ApiFootballRateLimitError) {
         throw err;
       }
       if (allowDemoFallback()) {
@@ -618,33 +673,12 @@ export class ApiFootballProvider {
     if (!this.token) {
       throw new Error("API_FOOTBALL_KEY is not configured");
     }
-    const response = await fetch(`${API_FOOTBALL_BASE_URL}${path}`, {
-      headers: {
-        "x-apisports-key": this.token,
-        Accept: "application/json",
-      },
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      throw new Error(`API-Football request failed: ${response.status}`);
-    }
-    const payload = (await response.json()) as ApiFootballResponse<T>;
-    if (payload.errors && Object.keys(payload.errors).length > 0) {
-      const msg = Object.entries(payload.errors)
-        .map(([key, value]) => `${key}: ${String(value)}`)
-        .join("; ");
-      if (isApiFootballQuotaError(new Error(msg))) {
-        throw new ApiFootballQuotaError(msg);
-      }
-      throw new Error(`API-Football: ${msg}`);
-    }
-    return payload.response;
-  }
-
-  /** Request that returns a single object (like team stats) instead of array */
-  private async requestSingle<T>(path: string): Promise<T | null> {
-    if (!this.token) return null;
-    try {
+    // Per-minute rate limits (e.g. Ultra plan = 450 req/min) can produce
+    // transient 429s during bursts. Retry up to 2 extra times with a short
+    // backoff before giving up — much better UX than degrading to demo.
+    const maxAttempts = 3;
+    let lastStatus = 0;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const response = await fetch(`${API_FOOTBALL_BASE_URL}${path}`, {
         headers: {
           "x-apisports-key": this.token,
@@ -652,12 +686,96 @@ export class ApiFootballProvider {
         },
         cache: "no-store",
       });
-      if (!response.ok) return null;
+      if (response.status === 429) {
+        lastStatus = 429;
+        if (attempt < maxAttempts) {
+          const retryAfter = Number(response.headers.get("retry-after"));
+          const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+            ? Math.min(retryAfter * 1000, 5000)
+            : 600 * attempt; // 600ms, 1200ms backoff
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
+        // Transient per-second/minute throttle — NOT daily quota.
+        throw new ApiFootballRateLimitError(
+          `API-Football rate limit (HTTP 429) on ${path} after ${maxAttempts} attempts`
+        );
+      }
+      if (!response.ok) {
+        throw new Error(`API-Football request failed: ${response.status}`);
+      }
       const payload = (await response.json()) as ApiFootballResponse<T>;
+      if (payload.errors && Object.keys(payload.errors).length > 0) {
+        const msg = Object.entries(payload.errors)
+          .map(([key, value]) => `${key}: ${String(value)}`)
+          .join("; ");
+        if (isApiFootballQuotaError(new Error(msg))) {
+          throw new ApiFootballQuotaError(msg);
+        }
+        throw new Error(`API-Football: ${msg}`);
+      }
       return payload.response;
-    } catch {
-      return null;
     }
+    throw new ApiFootballRateLimitError(
+      `API-Football rate limit (HTTP ${lastStatus}) on ${path}`
+    );
+  }
+
+  private async getLeagueDetail(leagueId: string): Promise<ApiFootballLeagueDetailItem | null> {
+    const cached = this.leagueDetailCache.get(leagueId);
+    if (cached) return cached;
+
+    const rows = await this.request<ApiFootballLeagueDetailItem[]>(
+      `/leagues?id=${encodeURIComponent(leagueId)}`
+    );
+    const item = rows[0] ?? null;
+    if (item) {
+      this.leagueDetailCache.set(leagueId, item);
+    }
+    return item;
+  }
+
+  private async resolveSeasonForLeague(
+    leagueId: string,
+    date: Date,
+    countryId?: string
+  ): Promise<number> {
+    const detail = await this.getLeagueDetail(leagueId);
+    if (detail) {
+      return pickSeasonYearFromLeagueDetail(detail, date, countryId ?? detail.country.name);
+    }
+    return apiFootballSeasonForDate(date, countryId);
+  }
+
+  /** Request that returns a single object (like team stats) instead of array */
+  private async requestSingle<T>(path: string): Promise<T | null> {
+    if (!this.token) return null;
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const response = await fetch(`${API_FOOTBALL_BASE_URL}${path}`, {
+          headers: {
+            "x-apisports-key": this.token,
+            Accept: "application/json",
+          },
+          cache: "no-store",
+        });
+        if (response.status === 429 && attempt < maxAttempts) {
+          const retryAfter = Number(response.headers.get("retry-after"));
+          const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+            ? Math.min(retryAfter * 1000, 5000)
+            : 600 * attempt;
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
+        if (!response.ok) return null;
+        const payload = (await response.json()) as ApiFootballResponse<T>;
+        return payload.response;
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
 
   private async fetchTeamRecentMatches(teamId: number, currentFixtureId?: number): Promise<TeamRecentMatch[]> {
@@ -706,58 +824,62 @@ export class ApiFootballProvider {
   async getLeagues(countryId?: string): Promise<League[]> {
     return this.withDemoFallback(
       async () => {
-        const params = new URLSearchParams();
+        const merged = new Map<number, ApiFootballLeagueItem>();
+
         if (countryId) {
           const countryName = countryId
             .split("-")
             .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
             .join(" ");
-          params.set("country", countryName);
+          const params = new URLSearchParams({ country: countryName });
+          const rows = await this.request<ApiFootballLeagueItem[]>(`/leagues?${params.toString()}`);
+          mergeLeagueCatalogRows(merged, rows);
+        } else {
+          for (const season of leagueCatalogSeasonCandidates(new Date())) {
+            const params = new URLSearchParams({ season: String(season) });
+            const rows = await this.request<ApiFootballLeagueItem[]>(`/leagues?${params.toString()}`);
+            mergeLeagueCatalogRows(merged, rows);
+          }
         }
-        const season = apiFootballSeasonForDate(new Date(), countryId);
-        params.set("season", String(season));
-        const rows = await this.request<ApiFootballLeagueItem[]>(`/leagues?${params.toString()}`);
-        return rows
-          .filter((item) => item.league.type === "League" || item.league.type === "Cup")
-          .map((item) => {
-            const resolvedCountryId = countryIdFromNameCode(item.country.name);
-            const tier = determineTier(item.league.name);
-            return {
-              id: String(item.league.id),
-              countryId: resolvedCountryId,
-              name: item.league.name,
-              tier,
-              season: String(season),
-              coverageScore: tier === "elite" ? 90 : tier === "standard" ? 72 : 55,
-              logo: item.league.logo ?? undefined,
-            };
-          })
-          .sort((a, b) => b.coverageScore - a.coverageScore);
+
+        return [...merged.values()]
+          .filter((item) => isSupportedLeagueType(item.league.type))
+          .map((item) => mapApiFootballLeagueRow(item, countryId, determineTier))
+          .sort((a, b) => b.coverageScore - a.coverageScore || a.name.localeCompare(b.name, "es"));
       },
       () => this.fallback.getLeagues(countryId)
     );
   }
 
-  async getFixtures(filters: { leagueId?: string; date?: string } = {}): Promise<Fixture[]> {
+  async getFixtures(
+    filters: { leagueId?: string; date?: string; countryId?: string } = {}
+  ): Promise<Fixture[]> {
     if (!filters.date) {
       throw new Error("API-Football fixtures require a date filter");
     }
     return this.withDemoFallback(
       async () => {
         const queryDate = filters.date!;
+        const queryDateObj = new Date(`${queryDate}T12:00:00`);
         const params = new URLSearchParams();
         params.set("date", queryDate);
         params.set("timezone", fixtureQueryTimezone());
         if (filters.leagueId) {
           params.set("league", filters.leagueId);
-          params.set(
-            "season",
-            String(apiFootballSeasonForDate(new Date(`${queryDate}T12:00:00`)))
+          const season = await this.resolveSeasonForLeague(
+            filters.leagueId,
+            queryDateObj,
+            filters.countryId
           );
+          params.set("season", String(season));
         }
         const rows = await this.request<ApiFootballFixtureItem[]>(`/fixtures?${params.toString()}`);
-        const maxFixturesPerDay = Math.max(50, Number(process.env.API_FOOTBALL_MAX_FIXTURES_PER_DAY ?? "500"));
-        return rows.slice(0, maxFixturesPerDay).map((item) => this.mapFixture(item));
+        const maxFixturesPerDay = resolveMaxFixturesPerDay();
+        const capped =
+          maxFixturesPerDay != null && rows.length > maxFixturesPerDay
+            ? rows.slice(0, maxFixturesPerDay)
+            : rows;
+        return capped.map((item) => this.mapFixture(item));
       },
       () => this.fallback.getFixtures(filters)
     );
@@ -841,7 +963,7 @@ export class ApiFootballProvider {
           params.set("league", leagueId);
           params.set(
             "season",
-            String(apiFootballSeasonForDate(new Date(`${date}T12:00:00`)))
+            String(await this.resolveSeasonForLeague(leagueId, new Date(`${date}T12:00:00`)))
           );
         }
         const response = await fetch(`${API_FOOTBALL_BASE_URL}/odds?${params.toString()}`, {
@@ -932,7 +1054,7 @@ export class ApiFootballProvider {
       const rows = await this.request<ApiFootballFixtureItemFull[]>(`/fixtures?id=${fixtureId}`);
       const item = rows[0];
       if (!item) throw new Error("Not found");
-      const mapped = this.mapFixture(item as ApiFootballFixtureItem);
+      let mapped = this.mapFixture(item as ApiFootballFixtureItem);
 
       // Extract live events
       const events: ApiLiveEvent[] = (item.events ?? []).map((e) => ({
@@ -958,15 +1080,13 @@ export class ApiFootballProvider {
         }
       }
 
-      // Update result with live score
-      if (item.goals?.home !== null && item.goals?.away !== null) {
-        mapped.result = {
-          homeGoals: item.goals.home ?? 0,
-          awayGoals: item.goals.away ?? 0,
-          totalGoals: (item.goals.home ?? 0) + (item.goals.away ?? 0),
-          bttsActual: (item.goals.home ?? 0) > 0 && (item.goals.away ?? 0) > 0,
-        };
-      }
+      // Update result with live score (fulltime/goals aware)
+      const resolved = resolveApiFootballGoals(item);
+      mapped.result = buildMatchResult(resolved, {
+        homeGoals: safeNum(item.score?.halftime?.home, 0),
+        awayGoals: safeNum(item.score?.halftime?.away, 0),
+      });
+      mapped = await this.finalizeMappedFixtureScore(mapped, fixtureId, mapApiFootballEvents(item.events));
 
       // Add elapsed time
       (mapped as any).elapsed = item.fixture?.status?.elapsed ?? 0;
@@ -984,10 +1104,10 @@ export class ApiFootballProvider {
     }
     return this.withDemoFallback(
       async () => {
-        const rows = await this.request<ApiFootballFixtureItem[]>(`/fixtures?id=${fixtureId}`);
+        const rows = await this.request<ApiFootballFixtureItemFull[]>(`/fixtures?id=${fixtureId}`);
         const fixture = rows[0];
         if (!fixture) throw new Error(`Fixture not found: ${fixtureId}`);
-        const mapped = this.mapFixture(fixture);
+        let mapped = this.mapFixture(fixture);
 
       // Enrich with real team statistics
       try {
@@ -1006,9 +1126,11 @@ export class ApiFootballProvider {
       }
 
       // Enrich with lineups if available
+      let parsedLineups: import("@/shared/domain").MatchLineup[] = [];
       try {
         const lineupsData = await this.requestSingle<any[]>(`/fixtures/lineups?fixture=${fixtureId}`);
         if (lineupsData && lineupsData.length >= 2) {
+          parsedLineups = this.parseLineupsFromApiRows(lineupsData);
           mapped.coverage.hasLineups = true;
         }
       } catch {
@@ -1077,9 +1199,64 @@ export class ApiFootballProvider {
         // Non-fatal
       }
 
-      return mapped;
+      let awayTeamCity: string | undefined;
+      try {
+        const awayTeamRow = await this.requestSingle<Array<{ venue?: { city?: string } }>>(
+          `/teams?id=${fixture.teams.away.id}`
+        );
+        awayTeamCity = awayTeamRow?.[0]?.venue?.city ?? undefined;
+      } catch {
+        // Non-fatal
+      }
+
+      mapped = await enrichFixtureOperationalContextAsync(
+        mapped,
+        {
+          name: fixture.fixture.venue?.name,
+          city: fixture.fixture.venue?.city,
+          country: fixture.league.country,
+        },
+        awayTeamCity
+      );
+
+      if (parsedLineups.length > 0) {
+        mapped = applyLineupsToSquad(mapped, parsedLineups);
+      }
+
+      return this.finalizeMappedFixtureScore(mapped, fixtureId, mapApiFootballEvents(fixture.events));
       },
       () => this.fallback.getMatch(fixtureId)
+    );
+  }
+
+  async getLiveOdds(fixtureId: string): Promise<FixtureMarket> {
+    if (!/^\d+$/.test(fixtureId)) {
+      return emptyFixtureMarket();
+    }
+    return this.withDemoFallback(
+      async () => {
+        try {
+          const rows = await this.request<ApiOddsDateItem[]>(`/odds/live?fixture=${fixtureId}`);
+          if (rows && rows.length > 0 && rows[0].bookmakers) {
+             const best = extractBestOddsFromBookmakers(rows[0].bookmakers, emptyFixtureMarket());
+             if (best && best.homeWinOdds) return best as FixtureMarket;
+          }
+        } catch {
+          // fallback to pre-match odds
+        }
+        
+        try {
+          const rows2 = await this.request<ApiOddsDateItem[]>(`/odds?fixture=${fixtureId}`);
+          if (rows2 && rows2.length > 0 && rows2[0].bookmakers) {
+            const best = extractBestOddsFromBookmakers(rows2[0].bookmakers, emptyFixtureMarket());
+            if (best && best.homeWinOdds) return best as FixtureMarket;
+          }
+        } catch {
+          // ignore
+        }
+        return emptyFixtureMarket();
+      },
+      async () => emptyFixtureMarket()
     );
   }
 
@@ -1171,16 +1348,7 @@ export class ApiFootballProvider {
           }
         }
 
-        const events: import("@/shared/domain").MatchEvent[] = (item.events ?? []).map((e) => ({
-          time: e.time?.elapsed ?? 0,
-          extraTime: e.time?.extra ?? undefined,
-          team: e.team?.name ?? "",
-          teamLogo: e.team?.logo,
-          player: e.player?.name ?? "",
-          assist: e.assist?.name ?? undefined,
-          type: e.type ?? "",
-          detail: e.detail ?? "",
-        }));
+        const events: import("@/shared/domain").MatchEvent[] = mapApiFootballEvents(item.events);
 
         const statistics: import("@/shared/domain").MatchStatistic[] = [];
         if (item.statistics && item.statistics.length >= 2) {
@@ -1229,20 +1397,39 @@ export class ApiFootballProvider {
     );
   }
 
+  private async finalizeMappedFixtureScore(
+    mapped: Fixture,
+    fixtureId: string,
+    events: MatchEvent[]
+  ): Promise<Fixture> {
+    let fixture = events.length ? reconcileFixtureResult(mapped, events) : mapped;
+    if (!isSuspiciousMatchResult(fixture)) return fixture;
+
+    try {
+      const detail = await this.getMatchDetail(fixtureId);
+      if (detail.events.length) {
+        fixture = reconcileFixtureResult(fixture, detail.events);
+      }
+    } catch {
+      // Non-fatal — keep best effort from goals/fulltime/events already parsed
+    }
+
+    return fixture;
+  }
+
   private mapFixture(item: ApiFootballFixtureItem): Fixture {
-    const status = normalizeStatus(item.fixture.status.short);
-    const homeGoals = safeNum(item.goals.home, 0);
-    const awayGoals = safeNum(item.goals.away, 0);
+    const mappedStatus = mapApiFootballStatusShort(
+      item.fixture.status.short,
+      item.fixture.status.long
+    );
+    const status = mappedStatus.status;
+    const resolvedGoals = resolveApiFootballGoals(item);
     const result =
       status === "final" || status === "live"
-        ? {
-            homeGoals,
-            awayGoals,
-            bttsActual: homeGoals > 0 && awayGoals > 0,
-            totalGoals: homeGoals + awayGoals,
-            firstHalfHome: safeNum(item.score?.halftime?.home, 0),
-            firstHalfAway: safeNum(item.score?.halftime?.away, 0),
-          }
+        ? buildMatchResult(resolvedGoals, {
+            homeGoals: safeNum(item.score?.halftime?.home, 0),
+            awayGoals: safeNum(item.score?.halftime?.away, 0),
+          })
         : undefined;
 
     const tier = determineTier(item.league.name);
@@ -1259,9 +1446,18 @@ export class ApiFootballProvider {
       kickoff: item.fixture.date,
       elapsed: item.fixture.status.elapsed ?? null,
       status,
+      statusShort: mappedStatus.statusShort,
+      statusLong: mappedStatus.statusLong,
       result,
       home: buildTeam(item.teams.home.id, item.teams.home.name, item.teams.home.logo),
       away: buildTeam(item.teams.away.id, item.teams.away.name, item.teams.away.logo),
+      venue: item.fixture.venue?.name
+        ? {
+            name: item.fixture.venue.name,
+            city: item.fixture.venue.city ?? undefined,
+            country: item.league.country,
+          }
+        : undefined,
       coverage: {
         tier,
         hasLineups: false,
@@ -1292,7 +1488,7 @@ export class ApiFootballProvider {
   }
 
   async getLeagueCoverageReport(leagueId: string, countryId?: string): Promise<LeagueCoverageReport> {
-    const season = apiFootballSeasonForDate(new Date(), countryId);
+    const season = await this.resolveSeasonForLeague(leagueId, new Date(), countryId);
     const rows = await this.request<ApiFootballLeagueDetailItem[]>(
       `/leagues?id=${encodeURIComponent(leagueId)}&season=${season}`
     );
@@ -1336,7 +1532,7 @@ export class ApiFootballProvider {
   }
 
   async getLeagueStandings(leagueId: string, countryId?: string, limit = 5): Promise<LeagueStandingRow[]> {
-    const season = apiFootballSeasonForDate(new Date(), countryId);
+    const season = await this.resolveSeasonForLeague(leagueId, new Date(), countryId);
     const rows = await this.request<Array<{ league: { id: number }; standings: ApiFootballStandingItem[][] }>>(
       `/standings?league=${encodeURIComponent(leagueId)}&season=${season}`
     );
@@ -1350,5 +1546,16 @@ export class ApiFootballProvider {
       points: row.points,
       goalDiff: row.goalsDiff,
     }));
+  }
+
+  async getBookmakersOddsForFixture(fixtureId: string): Promise<Record<string, FixtureMarket>> {
+    try {
+      const oddsData = await this.requestSingle<ApiOddsResponse[]>(`/odds?fixture=${fixtureId}`);
+      const payload = oddsData?.[0];
+      if (!payload?.bookmakers?.length) return {};
+      return extractAllBookmakerOdds(payload.bookmakers);
+    } catch {
+      return {};
+    }
   }
 }

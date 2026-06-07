@@ -33,7 +33,10 @@ import {
   findNextLeagueFixture,
   flattenRangeFixtures,
   groupCountriesByRegion,
+  LEAGUE_CATEGORY_FILTERS,
+  leagueCategoryLabelEs,
   sortLeagues,
+  type LeagueCategoryFilter,
   type LeagueSortKey,
   type LeagueWindowMode,
 } from "@/frontend/lib/league-country-utils";
@@ -89,6 +92,7 @@ export function LeagueCountryView({
   const [leagueQuery, setLeagueQuery] = useState("");
   const [regionFilter, setRegionFilter] = useState("all");
   const [tierFilter, setTierFilter] = useState<"all" | League["tier"]>("all");
+  const [categoryFilter, setCategoryFilter] = useState<LeagueCategoryFilter>("all");
   const [sortKey, setSortKey] = useState<LeagueSortKey>("coverageScore");
   const [windowMode, setWindowMode] = useState<LeagueWindowMode>("day");
   const [compareIds, setCompareIds] = useState<string[]>([]);
@@ -129,10 +133,11 @@ export function LeagueCountryView({
     const tierFiltered = leagues.filter(
       (league) =>
         (tierFilter === "all" || league.tier === tierFilter) &&
+        (categoryFilter === "all" || league.category === categoryFilter) &&
         `${league.name} ${league.season}`.toLowerCase().includes(leagueQuery.toLowerCase())
     );
     return sortLeagues(tierFiltered, sortKey, fixtureCountByLeague);
-  }, [leagues, tierFilter, leagueQuery, sortKey, fixtureCountByLeague]);
+  }, [leagues, tierFilter, categoryFilter, leagueQuery, sortKey, fixtureCountByLeague]);
 
   const selectedCountryObj = countries.find((country) => country.id === selectedCountry);
   const selectedLeagueObj = leagues.find((league) => league.id === selectedLeague);
@@ -244,11 +249,17 @@ export function LeagueCountryView({
       leagueId: selectedLeague || undefined,
       date: selectedDate,
     });
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(url);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        window.prompt("Copia este enlace", url);
+      }
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 1800);
+    } catch {
+      window.prompt("Copia este enlace", url);
     }
-    setShareCopied(true);
-    setTimeout(() => setShareCopied(false), 1800);
   };
 
   const coverageScore = coverage?.coverageScore ?? selectedLeagueObj?.coverageScore ?? 0;
@@ -274,7 +285,9 @@ export function LeagueCountryView({
         </div>
       </article>
 
-      {(fixturesDataSource === "api-football-quota" || fixturesDataSource === "demo-fallback") && (
+      {(fixturesDataSource === "api-football-quota" ||
+        fixturesDataSource === "api-football-rate-limit" ||
+        fixturesDataSource === "demo-fallback") && (
         <DataStatusBanner fixturesDataSource={fixturesDataSource} />
       )}
 
@@ -413,6 +426,19 @@ export function LeagueCountryView({
             ))}
           </div>
 
+          <div className="lcv-tier-filter">
+            {LEAGUE_CATEGORY_FILTERS.map((category) => (
+              <button
+                key={category}
+                type="button"
+                className={categoryFilter === category ? "active" : ""}
+                onClick={() => setCategoryFilter(category)}
+              >
+                {category === "all" ? "Todas cat." : leagueCategoryLabelEs(category)}
+              </button>
+            ))}
+          </div>
+
           <div className="lcv-sort-row">
             <span>Ordenar</span>
             {([
@@ -451,7 +477,8 @@ export function LeagueCountryView({
                     <div className="lcv-league-info">
                       <strong>{league.name}</strong>
                       <span>
-                        {league.season} · {league.tier} · {league.coverageScore}/100
+                        {league.season} · {leagueCategoryLabelEs(league.category)} · {league.tier} ·{" "}
+                        {league.coverageScore}/100
                       </span>
                     </div>
                     {fxCount > 0 && <span className="lcv-league-badge">{fxCount}</span>}
@@ -472,6 +499,7 @@ export function LeagueCountryView({
                       type="button"
                       className={`lcv-compare-btn ${comparing ? "active" : ""}`}
                       title="Comparar liga"
+                      aria-label={comparing ? `Quitar ${league.name} del comparador` : `Comparar ${league.name}`}
                       onClick={() => toggleCompare(league.id)}
                     >
                       <BarChart3 size={13} />

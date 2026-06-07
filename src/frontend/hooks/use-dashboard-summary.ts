@@ -19,7 +19,9 @@ export function useDashboardSummary(date: string, leagueId?: string) {
     queryFn: async (): Promise<DashboardSummaryPayload> => {
       const params = new URLSearchParams({ date });
       if (leagueId) params.set("leagueId", leagueId);
-      const res = await fetch(`/api/dashboard/summary?${params.toString()}`);
+      const res = await fetch(`/api/dashboard/summary?${params.toString()}`, {
+        credentials: "include",
+      });
       if (!res.ok) throw new Error("No se pudo cargar el resumen del dashboard");
       const body = await res.json();
       return body.data ?? { insights: [], topPicks: [] };
@@ -27,5 +29,6 @@ export function useDashboardSummary(date: string, leagueId?: string) {
     enabled: Boolean(date),
     staleTime: 30_000,
     refetchInterval: 60_000,
+    refetchOnMount: "always",
   });
 }

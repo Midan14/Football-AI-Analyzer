@@ -22,6 +22,7 @@ export function BankrollPanel({ compact = false }: { compact?: boolean }) {
   const unitSize = data?.data?.unitSize || 10;
   const maxStake = data?.data?.maxRecommendedStake || 50;
   const profitPositive = netProfit >= 0;
+  const profitText = `${profitPositive ? "+" : "-"}$${Math.abs(netProfit).toFixed(2)}`;
 
   return (
     <div className={`br-panel ${compact ? "br-panel-compact" : ""}`}>
@@ -34,7 +35,7 @@ export function BankrollPanel({ compact = false }: { compact?: boolean }) {
           <span className="br-stat-label">Profit neto</span>
           <strong className="br-stat-value">
             {profitPositive ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-            ${Math.abs(netProfit).toFixed(2)}
+            {profitText}
           </strong>
         </div>
         <div className={`br-stat-card ${roi >= 0 ? "positive" : "negative"}`}>

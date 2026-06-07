@@ -29,6 +29,27 @@ export function DataStatusBanner({ fixturesDataSource, onRefresh }: DataStatusBa
     );
   }
 
+  if (fixturesDataSource === "api-football-rate-limit") {
+    return (
+      <div className="data-status-banner data-status-banner--demo" role="status">
+        <RefreshCw size={18} />
+        <div>
+          <strong>Saturación temporal de API-Football</strong>
+          <p>
+            El proveedor está aplicando un rate-limit por segundo. Reintentando automáticamente —
+            los datos vuelven en unos segundos.
+          </p>
+        </div>
+        {onRefresh ? (
+          <button type="button" className="data-status-banner__btn" onClick={onRefresh}>
+            <RefreshCw size={16} />
+            Reintentar ahora
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
   if (fixturesDataSource === "demo-fallback") {
     return (
       <div className="data-status-banner data-status-banner--demo" role="status">
@@ -39,6 +60,12 @@ export function DataStatusBanner({ fixturesDataSource, onRefresh }: DataStatusBa
             La API no devolvió partidos reales para los filtros actuales. Los datos mostrados son de ejemplo.
           </p>
         </div>
+        {onRefresh ? (
+          <button type="button" className="data-status-banner__btn" onClick={onRefresh}>
+            <RefreshCw size={16} />
+            Reintentar
+          </button>
+        ) : null}
       </div>
     );
   }

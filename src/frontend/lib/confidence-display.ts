@@ -7,6 +7,13 @@ import {
   type AnalysisModelMode,
   type AnalysisScenarioId,
 } from "@/shared/analysis-preferences";
+import {
+  CONFIDENCE_THRESHOLDS,
+  decisionFromConfidence,
+  riskLevelFromConfidence,
+  type ConfidenceDecision,
+  type ConfidenceRisk,
+} from "@/shared/confidence-thresholds";
 
 export type DisplayConfidence = {
   baseScore: number;
@@ -16,6 +23,12 @@ export type DisplayConfidence = {
   isVisualAdjustment: boolean;
   hint: string;
 };
+
+export function riskFromConfidence(score: number): ConfidenceRisk {
+  return riskLevelFromConfidence(score);
+}
+
+export { CONFIDENCE_THRESHOLDS, decisionFromConfidence };
 
 /** Derive display metadata from server-adjusted analysis when available. */
 export function confidenceFromAnalysis(

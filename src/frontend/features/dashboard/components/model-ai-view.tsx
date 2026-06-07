@@ -26,6 +26,7 @@ import { buildModelRuns } from "../model-runs-builder";
 import { useMLStatus } from "@/frontend/hooks/use-ml-status";
 import { useFixtures } from "@/frontend/hooks/use-fixtures";
 import { todayIsoDateColombia } from "@/frontend/lib/date-utils";
+import { fixtureStatusLabelEs } from "@/shared/fixture-status";
 import {
   AdvancedTab,
   AllModelsTab,
@@ -337,7 +338,9 @@ function EmptyFixturePicker({
                 {f.home.name} vs {f.away.name}
               </strong>
               <small>{f.leagueName}</small>
-              <span className={`mai-picker-status ${f.status}`}>{f.status}</span>
+              <span className={`mai-picker-status ${f.status}`}>
+                {fixtureStatusLabelEs(f.status, f.statusLong)}
+              </span>
             </button>
           ))}
         </div>

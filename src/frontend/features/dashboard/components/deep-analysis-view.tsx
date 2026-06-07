@@ -33,6 +33,8 @@ import { ScoreHeatmap, DonutChart1X2, PoissonDistribution, ValueBetBars, RadarMu
 
 type DeepAnalysisViewProps = {
   fixture?: Fixture;
+  onOpenMatchCenter?: () => void;
+  onOpenCalendar?: () => void;
 };
 
 const riskGradeConfig: Record<string, { color: string; bg: string; label: string }> = {
@@ -53,7 +55,7 @@ const categoryIcons: Record<string, React.ReactNode> = {
   Lesiones: <Users size={20} />,
 };
 
-export function DeepAnalysisView({ fixture }: DeepAnalysisViewProps) {
+export function DeepAnalysisView({ fixture, onOpenMatchCenter, onOpenCalendar }: DeepAnalysisViewProps) {
   const { data: deepAnalysis, isLoading, error, dataUpdatedAt, isFetching } = useDeepAnalysis(fixture?.id ?? "");
   const [showAiPrompt, setShowAiPrompt] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
@@ -73,7 +75,21 @@ export function DeepAnalysisView({ fixture }: DeepAnalysisViewProps) {
           <h2><Brain size={22} /> Análisis Profundo</h2>
           <span>Selecciona un partido</span>
         </div>
-        <div className="empty-state large">Selecciona un partido para ejecutar el análisis profundo.</div>
+        <div className="empty-state large">
+          Selecciona un partido para ejecutar el análisis profundo.
+          <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center" }}>
+            {onOpenMatchCenter ? (
+              <button type="button" className="qa-btn-primary" onClick={onOpenMatchCenter}>
+                Ir a Match Center
+              </button>
+            ) : null}
+            {onOpenCalendar ? (
+              <button type="button" className="qa-btn-deep" onClick={onOpenCalendar}>
+                Abrir calendario
+              </button>
+            ) : null}
+          </div>
+        </div>
       </article>
     );
   }

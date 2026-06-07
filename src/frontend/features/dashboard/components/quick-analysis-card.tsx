@@ -7,16 +7,30 @@ import {
 } from "lucide-react";
 import type { AnalysisResult, Fixture, MatchLineup, MatchEvent, MatchStatistic, TeamRecentMatch, TeamSnapshot } from "@/shared/domain";
 import type { AnalysisPipelineStatus } from "@/shared/analysis-pipeline";
+import { isActionableValueListing } from "@/shared/market-recommendation-rules";
 import { AnalysisPipelineBadge } from "./analysis-pipeline-badge";
 import { TacticalRadar } from "./tactical-radar";
 import {
   MatchCenterContextPanel,
   MatchCenterH2HPanel,
+  MatchCenterSquadPanel,
   MatchCenterTabBar,
   type MatchCenterTab,
 } from "./match-center-panels";
+import { MatchEventTimeline } from "./match-event-timeline";
 import { useLocalStorage } from "@/frontend/hooks/use-local-storage";
+import { useOddsClvSummary } from "@/frontend/hooks/use-odds-intelligence";
+import { usePerformanceMetrics } from "@/frontend/hooks/use-performance-metrics";
+import { FAVORITE_TEAM_IDS_KEY } from "@/frontend/lib/favorite-team-storage";
 import { createPredictionFromAnalysis } from "@/frontend/lib/predictions-api";
+import { formatKickoffColombia } from "@/frontend/lib/date-utils";
+import {
+  CONFIDENCE_THRESHOLDS,
+  decisionFromConfidence,
+  riskFromConfidence,
+} from "@/frontend/lib/confidence-display";
+import { fixtureStatusLabelEs } from "@/shared/fixture-status";
+import { normalizeRecommendationMarket, predictionMarketKey } from "@/shared/prediction-market-mapping";
 
 type MLPrediction = {
   prediction: string;
@@ -121,11 +135,76 @@ function RecentMatchRow({ match }: { match: TeamRecentMatch }) {
   );
 }
 
+function getFixtureOddsForMarket(fixture: Fixture, market: string): number {
+  const clean = normalizeRecommendationMarket(market);
+  const oddsMap: Record<string, number | undefined> = {
+    "Local gana": fixture.market.homeWinOdds,
+    Empate: fixture.market.drawOdds,
+    "Visitante gana": fixture.market.awayWinOdds,
+    "Doble Chance 1X": fixture.market.dc1xOdds,
+    "Doble Chance X2": fixture.market.dcx2Odds,
+    "Doble Chance 12": fixture.market.dc12Odds,
+    "Over 1.5": fixture.market.over15Odds,
+    "Over 2.5": fixture.market.over25Odds,
+    "Over 3.5": fixture.market.over35Odds,
+    "Under 1.5": fixture.market.under15Odds,
+    "Under 2.5": fixture.market.under25Odds,
+    "Under 3.5": fixture.market.under35Odds,
+    "BTTS Sí": fixture.market.bttsYesOdds,
+    "BTTS No": fixture.market.bttsNoOdds,
+    "AH Local -1": fixture.market.ahHomeMinus1,
+    "AH Visitante +1": fixture.market.ahAwayPlus1,
+  };
+  return oddsMap[clean] ?? 0;
+}
+
+function formatSignedPercent(value: number): string {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(1)}%`;
+}
+
+function buildStakeValidationReason(input: {
+  stakeUnits: number;
+  realOdds: number;
+  fairOdds: number;
+  edge: number;
+}): string {
+  if (input.stakeUnits <= 0) return "Kelly conservador no asigna stake para este mercado.";
+  if (input.realOdds <= 1.01) return "No hay cuota real del proveedor para respaldar el stake.";
+  if (input.fairOdds <= 1.01) return "Falta cuota justa calculada para comparar valor.";
+  if (input.realOdds <= input.fairOdds) return "La cuota real no supera la cuota justa del modelo.";
+  if (input.edge <= 0) return "El edge calculado no es positivo.";
+  return "Stake permitido: existe cuota real, edge positivo y cuota real por encima de cuota justa.";
+}
+
+function auditedPredictionLabel(analysis: AnalysisResult): string {
+  const { homeWin, draw, awayWin } = analysis.probabilities;
+  if (draw >= homeWin && draw >= awayWin) return "Empate";
+  return homeWin >= awayWin ? "Local" : "Visita";
+}
+
+function consistencyReason(flags: string[] = []): string {
+  if (flags.includes("hybrid_away_market_contradiction")) {
+    return "El ML elevaba demasiado la visita contra Dixon-Coles y la cuota de mercado; se redujo antes de recomendar.";
+  }
+  if (flags.includes("hybrid_home_market_contradiction")) {
+    return "El ML elevaba demasiado al local contra Dixon-Coles y la cuota de mercado; se redujo antes de recomendar.";
+  }
+  if (flags.includes("hybrid_goal_model_contradiction")) {
+    return "El 1X2 del ML no cuadraba con los goles esperados y marcadores probables; se reconciliaron probabilidades.";
+  }
+  return "La predicción auditada coincide con las señales principales del motor.";
+}
+
 export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, events, statistics, loading, isFetching, isReanalyzing = false, lastUpdatedAt, onOpenDeep, addToast, mlPrediction, analysisPipeline, analysisError, analysisErrorMessage, onRetryAnalysis }: QuickAnalysisCardProps) {
-  const [favoriteTeams, setFavoriteTeams] = useLocalStorage<string[]>("live-sound-favorite-teams", []);
+  const [favoriteTeams, setFavoriteTeams] = useLocalStorage<string[]>(FAVORITE_TEAM_IDS_KEY, []);
   const [activeTab, setActiveTab] = useState<MatchCenterTab>("resumen");
   const savedFixtureRef = useRef<string>("");
   const [saved, setSaved] = useState(false);
+  const performanceQuery = usePerformanceMetrics("market");
+  const clvQuery = useOddsClvSummary();
+  const hybridConsistencyFlags = analysis?.advancedModels?.hybridPipeline?.consistencyFlags ?? [];
+  const auditedPrediction = analysis ? auditedPredictionLabel(analysis) : null;
 
   const handleReanalyze = async () => {
     setSaved(false);
@@ -136,8 +215,12 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
   // Auto-save prediction when analysis completes
   useEffect(() => {
     if (!analysis || !fixture || savedFixtureRef.current === fixture.id) return;
+    if (analysis.recommendation.market === "Sin valor claro" || analysis.recommendation.stakeUnits <= 0) {
+      setSaved(false);
+      return;
+    }
     savedFixtureRef.current = fixture.id;
-    const riskLevel = analysis.confidence.score >= 68 ? "BAJO" : analysis.confidence.score >= 52 ? "MODERADO" : "ALTO";
+    const riskLevel = riskFromConfidence(analysis.confidence.score);
     createPredictionFromAnalysis(fixture, analysis, riskLevel)
       .then(() => setSaved(true))
       .catch((err) => {
@@ -154,14 +237,7 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
     setFavoriteTeams((prev) => prev.includes(teamId) ? prev.filter((x) => x !== teamId) : [...prev, teamId]);
   };
 
-  const formatKickoff = (kickoff: string) => {
-    const d = new Date(kickoff);
-    return d.toLocaleString("es-CO", {
-      weekday: "short", day: "2-digit", month: "short",
-      hour: "2-digit", minute: "2-digit", hour12: false,
-      timeZone: "America/Bogota",
-    });
-  };
+  const formatKickoff = (kickoff: string) => formatKickoffColombia(kickoff).label;
 
   // ── Empty state ────────────────────────────────────────────────────────────
   if (analysisError && !analysis && !loading) {
@@ -192,7 +268,7 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
         <button className="qa-analyze-btn" onClick={handleReanalyze} disabled={isReanalyzing}>
           <Brain size={24} />
           <span>⚡ Ejecutar Análisis AI</span>
-          <small>Poisson Dixon-Coles · Neg.Binomial · ELO · Monte Carlo híbrido · Kelly · Bayesian</small>
+          <small>XGBoost · CatBoost · LightGBM · Redes Neuronales · Poisson · Monte Carlo · Kelly</small>
         </button>
       </div>
     );
@@ -205,11 +281,11 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
           <Brain size={36} className="spin" />
           <strong>Ejecutando modelos auditados de predicción...</strong>
           <div className="qa-loading-steps">
-            <span className="qa-step done">✓ Poisson Bivariado</span>
-            <span className="qa-step done">✓ Binomial Negativa</span>
-            <span className="qa-step done">✓ ELO Rating</span>
-            <span className="qa-step active">⟳ Ensemble (4 modelos)</span>
-            <span className="qa-step">○ Kelly Criterion</span>
+            <span className="qa-step done">✓ Modelos Estadísticos (Baseline)</span>
+            <span className="qa-step active">⟳ Evaluando XGBoost</span>
+            <span className="qa-step">○ Evaluando CatBoost</span>
+            <span className="qa-step">○ Evaluando LightGBM</span>
+            <span className="qa-step">○ Redes Neuronales (Deep Learning)</span>
             <span className="qa-step">○ Monte Carlo híbrido (50k)</span>
             <span className="qa-step">○ Generando recomendación</span>
           </div>
@@ -222,7 +298,7 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
   if (!analysis) return null;
 
   const handleSavePrediction = async () => {
-    const riskLevel = analysis.confidence.score >= 72 ? "BAJO" : analysis.confidence.score >= 58 ? "MODERADO" : "ALTO";
+    const riskLevel = riskFromConfidence(analysis.confidence.score);
     try {
       await createPredictionFromAnalysis(fixture, analysis, riskLevel);
       setSaved(true);
@@ -234,13 +310,42 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
 
   // ── Result state ───────────────────────────────────────────────────────────
   const bestMarket = analysis.recommendation;
+  const cleanBestMarket = normalizeRecommendationMarket(bestMarket.market);
+  const recommendationValueRow = analysis.valueTable.find((row) => normalizeRecommendationMarket(row.market) === cleanBestMarket);
+  const realOdds = getFixtureOddsForMarket(fixture, bestMarket.market);
+  const bookmakerName = fixture.market.bookmakerName ?? null;
+  const edge = recommendationValueRow?.edge ?? (realOdds > 1.01 && bestMarket.fairOdds > 1.01 ? (realOdds / bestMarket.fairOdds - 1) * 100 : 0);
+  const stakeAllowed = bestMarket.stakeUnits > 0 && realOdds > 1.01 && bestMarket.fairOdds > 1.01 && realOdds > bestMarket.fairOdds && edge > 0;
+  const stakeReason = buildStakeValidationReason({
+    stakeUnits: bestMarket.stakeUnits,
+    realOdds,
+    fairOdds: bestMarket.fairOdds,
+    edge,
+  });
+  const marketMetricKey = predictionMarketKey(bestMarket.market);
+  const marketMetric = performanceQuery.data?.metrics.find((metric) => metric.key === marketMetricKey);
+  const modelLabel = analysisPipeline?.label ?? analysis.ensemble?.dominantModel ?? "Ensemble interno";
+  const modelDetail = analysisPipeline?.detail ?? "Modelos estadisticos internos con Kelly conservador.";
   const confidence = analysis.confidence.score;
-  const riskLevel = confidence >= 72 ? "BAJO" : confidence >= 58 ? "MODERADO" : "ALTO";
-  const decision = confidence >= 72 ? "APOSTAR" : confidence >= 58 ? "PRECAUCIÓN" : "NO APOSTAR";
-  const decisionColor = confidence >= 72 ? "#34d399" : confidence >= 58 ? "#f59e0b" : "#f43f5e";
+  const noClearValue = bestMarket.market === "Sin valor claro" || bestMarket.stakeUnits <= 0;
+  const riskLevel = riskFromConfidence(confidence);
+  const rawDecision = decisionFromConfidence(confidence);
+  const decision = noClearValue
+    ? "NO APOSTAR"
+    : rawDecision === "PRECAUCION"
+      ? "PRECAUCIÓN"
+      : rawDecision === "NO_APOSTAR"
+        ? "NO APOSTAR"
+        : "APOSTAR";
+  const decisionColor =
+    noClearValue || rawDecision === "NO_APOSTAR"
+      ? "#f43f5e"
+      : rawDecision === "PRECAUCION"
+        ? "#f59e0b"
+        : "#34d399";
 
   const valueMarkets = analysis.valueTable
-    .filter((r) => r.edge > 3 && r.modelProbability > 30)
+    .filter((r) => isActionableValueListing(r, fixture))
     .sort((a, b) => b.edge - a.edge);
 
   const topScores = analysis.topExactScores?.slice(0, 5) ?? [];
@@ -306,6 +411,34 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
               </div>
             </div>
 
+            <div className="qa-context-strip">
+              <div>
+                <span>Estadio</span>
+                <strong>{fixture.venue?.name ?? "Por confirmar"}</strong>
+              </div>
+              <div>
+                <span>Clima</span>
+                <strong>
+                  {fixture.weather?.temperatureC != null ? `${fixture.weather.temperatureC}°C` : "N/D"}
+                </strong>
+              </div>
+              <div>
+                <span>Viaje</span>
+                <strong>{fixture.away.travelKm} km</strong>
+              </div>
+              <div>
+                <span>Motivación</span>
+                <strong>{fixture.home.motivation}/{fixture.away.motivation}</strong>
+              </div>
+              <div>
+                <span>Bajas</span>
+                <strong>
+                  {(fixture.squad?.home.injuries.length ?? 0) + (fixture.squad?.away.injuries.length ?? 0)} lesiones ·{" "}
+                  {(fixture.squad?.home.suspensions.length ?? 0) + (fixture.squad?.away.suspensions.length ?? 0)} sanciones
+                </strong>
+              </div>
+            </div>
+
             <div className="qa-recommendation">
               <div className="qa-rec-header">
                 <Target size={20} />
@@ -320,6 +453,93 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
                 </div>
               </div>
               <p className="qa-rec-rationale">{bestMarket.rationale}</p>
+
+              <div className="qa-bet-validation" aria-label="Validacion de apuesta">
+                <div className="qa-bet-validation-head">
+                  <div>
+                    <span>Validacion de apuesta</span>
+                    <strong className={stakeAllowed ? "ok" : "blocked"}>
+                      {stakeAllowed ? "Stake permitido" : "Stake bloqueado"}
+                    </strong>
+                  </div>
+                  <span className={`qa-bet-status ${stakeAllowed ? "ok" : "blocked"}`}>
+                    {stakeAllowed ? "REAL" : "NO ACCIONABLE"}
+                  </span>
+                </div>
+
+                <div className="qa-bet-validation-grid">
+                  <div>
+                    <span>Modelo usado</span>
+                    <b>{modelLabel}</b>
+                    <small>{modelDetail}</small>
+                  </div>
+                  <div>
+                    <span>Bookmaker / proveedor</span>
+                    <b>{realOdds > 1.01 ? bookmakerName ?? "Proveedor sin nombre" : "Sin cuota real"}</b>
+                    <small>{realOdds > 1.01 ? "Nombre recibido desde el proveedor de cuotas" : "Solo lectura predictiva"}</small>
+                  </div>
+                  <div>
+                    <span>Cuota real</span>
+                    <b>{realOdds > 1.01 ? realOdds.toFixed(2) : "-"}</b>
+                    <small>Debe superar la cuota justa</small>
+                  </div>
+                  <div>
+                    <span>Cuota justa</span>
+                    <b>{bestMarket.fairOdds > 1.01 ? bestMarket.fairOdds.toFixed(2) : "-"}</b>
+                    <small>Precio minimo del modelo</small>
+                  </div>
+                  <div>
+                    <span>Edge</span>
+                    <b className={edge > 0 ? "ok" : "blocked"}>{formatSignedPercent(edge)}</b>
+                    <small>{recommendationValueRow ? "Modelo vs mercado" : "Derivado de cuota real / justa"}</small>
+                  </div>
+                  <div>
+                    <span>Stake permitido</span>
+                    <b className={stakeAllowed ? "ok" : "blocked"}>{stakeAllowed ? `${bestMarket.stakeUnits}u` : "0u"}</b>
+                    <small>{stakeReason}</small>
+                  </div>
+                </div>
+
+                <div className="qa-bet-history">
+                  <div>
+                    <span>Historico del mercado</span>
+                    {marketMetric ? (
+                      <strong>
+                        {marketMetric.sampleSize} picks · Hit {(marketMetric.hitRate * 100).toFixed(1)}% · ROI/u {formatSignedPercent(marketMetric.roiPerUnit * 100)}
+                      </strong>
+                    ) : (
+                      <strong>Sin muestra suficiente para {marketMetricKey ?? cleanBestMarket}</strong>
+                    )}
+                  </div>
+                  <div>
+                    <span>Brier / calibracion</span>
+                    <strong>
+                      {marketMetric
+                        ? `${marketMetric.brier.toFixed(4)} · LL ${marketMetric.logLoss.toFixed(3)}`
+                        : "N/D"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>CLV promedio</span>
+                    <strong>
+                      {marketMetric?.avgClvPercent != null
+                        ? `${formatSignedPercent(marketMetric.avgClvPercent)} (${marketMetric.clvSampleSize})`
+                        : clvQuery.data && clvQuery.data.sampleSize > 0
+                          ? `${formatSignedPercent(clvQuery.data.avgClvPercent)} (${clvQuery.data.sampleSize})`
+                        : "N/D"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Decision ROI</span>
+                    <strong className={analysis.advancedModels?.calibration?.abstained ? "blocked" : "ok"}>
+                      {analysis.advancedModels?.calibration
+                        ? `${analysis.advancedModels.calibration.calibratedProbability}% · ${analysis.advancedModels.calibration.source}`
+                        : "Sin calibracion"}
+                    </strong>
+                    <small>{analysis.advancedModels?.calibration?.reason ?? "Aun sin muestra historica aplicable"}</small>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="qa-form-section">
@@ -398,6 +618,15 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
                       <b>{analysis.advancedModels.cardsRisk.expectedYellows}</b>
                       <small>{analysis.advancedModels.cardsRisk.highCardRisk ? "Riesgo alto" : "Riesgo normal"}</small>
                     </div>
+                    {analysis.advancedModels.multiMarket && (
+                      <div className="qa-odd-card">
+                        <span>Multi-mercado</span>
+                        <b>{analysis.advancedModels.multiMarket.calibration.valueFilterScore}%</b>
+                        <small>
+                          Córners {analysis.advancedModels.multiMarket.corners.dataQuality}% · Tarjetas {analysis.advancedModels.multiMarket.cards.dataQuality}%
+                        </small>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -424,7 +653,87 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
 
             <TacticalRadar fixture={fixture} analysis={analysis} />
 
-            {analysis.ensemble && (
+            {mlPrediction && (
+              <div className="qa-ml-section">
+                <h4><Brain size={16} /> Inteligencia Artificial (Deep Learning & Gradient Boosting)</h4>
+                <div className="qa-ensemble-header">
+                  <span className="qa-ensemble-dominant">
+                    Predicción auditada: <strong>{auditedPrediction}</strong>
+                  </span>
+                  <span className="qa-ensemble-agreement">
+                    Confianza AI: <strong>{mlPrediction.confidence}%</strong>
+                  </span>
+                </div>
+
+                {hybridConsistencyFlags.length > 0 && (
+                  <div className="qa-risk-chip" style={{ margin: "0.75rem 0", width: "fit-content" }}>
+                    <AlertTriangle size={14} />
+                    {consistencyReason(hybridConsistencyFlags)}
+                  </div>
+                )}
+                
+                <div className="qa-ensemble-grid">
+                  {Object.entries(mlPrediction.probabilities).map(([modelName, probs]) => {
+                    const is1x2 = probs["HOME_WIN"] !== undefined;
+                    if (!is1x2) return null; // Solo mostrar modelos 1x2 en este panel
+                    return (
+                      <div key={modelName} className="qa-model-card">
+                        <div className="qa-model-header">
+                          <strong>{modelName.toUpperCase()}</strong>
+                        </div>
+                        <div className="qa-model-probs">
+                          <div className="qa-model-prob">
+                            <span>1</span>
+                            <div className="qa-model-bar"><div style={{ width: `${probs["HOME_WIN"]}%` }} /></div>
+                            <b>{Math.round(probs["HOME_WIN"])}%</b>
+                          </div>
+                          <div className="qa-model-prob">
+                            <span>X</span>
+                            <div className="qa-model-bar draw"><div style={{ width: `${probs["DRAW"]}%` }} /></div>
+                            <b>{Math.round(probs["DRAW"])}%</b>
+                          </div>
+                          <div className="qa-model-prob">
+                            <span>2</span>
+                            <div className="qa-model-bar away"><div style={{ width: `${probs["AWAY_WIN"]}%` }} /></div>
+                            <b>{Math.round(probs["AWAY_WIN"])}%</b>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {mlPrediction.shap?.top_features && mlPrediction.shap.top_features.length > 0 && (
+                  <div className="qa-shap-section" style={{ marginTop: "1rem", background: "var(--bg-layer-1)", padding: "1rem", borderRadius: "8px" }}>
+                    <h4><Activity size={14} style={{ display: "inline", marginRight: "4px" }} /> Importancia de Factores (SHAP Values)</h4>
+                    <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: "0.5rem" }}>
+                      Estas son las variables que más impactaron la decisión de la Inteligencia Artificial.
+                    </p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                      {mlPrediction.shap.top_features.slice(0, 5).map((feat, i) => {
+                        const maxImpact = mlPrediction.shap.top_features[0].impact;
+                        const pct = (feat.impact / maxImpact) * 100;
+                        return (
+                          <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                            <span style={{ fontSize: "0.75rem", width: "120px", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
+                              {feat.feature.replace(/_/g, " ").toUpperCase()}
+                            </span>
+                            <div style={{ flex: 1, height: "6px", background: "var(--bg-layer-2)", borderRadius: "3px", overflow: "hidden" }}>
+                              <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent)" }} />
+                            </div>
+                            <span style={{ fontSize: "0.75rem", width: "30px", textAlign: "right", fontWeight: "bold" }}>
+                              {Math.round((feat.impact * 100))}%
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!mlPrediction && analysis.ensemble && (
               <div className="qa-ensemble-section">
                 <h4><Brain size={16} /> Ensemble — 4 Modelos de Predicción</h4>
                 <div className="qa-ensemble-header">
@@ -558,22 +867,8 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
 
             {events && events.length > 0 && (
               <div className="qa-events-section">
-                <h4><Clock size={16} /> Eventos del Partido ({events.length})</h4>
-                <div className="qa-events-list">
-                  {events.map((ev, i) => (
-                    <div key={i} className={`qa-event-row qa-event-${ev.type.toLowerCase()}`}>
-                      <span className="qa-event-time">{ev.time}{ev.extraTime ? `+${ev.extraTime}` : ""}′</span>
-                      <span className={`qa-event-icon ${ev.type.toLowerCase()}`}>
-                        {ev.type === "Goal" ? "⚽" : ev.detail?.includes("Red") ? "🟥" : ev.detail?.includes("Yellow") ? "🟨" : ev.type === "subst" ? "🔄" : ev.type === "Var" ? "📺" : "•"}
-                      </span>
-                      <div className="qa-event-info">
-                        <strong>{ev.player}</strong>
-                        {ev.assist && <span className="qa-event-assist">({ev.assist})</span>}
-                        <small>{ev.detail} · {ev.team}</small>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <h4><Clock size={16} /> Desarrollo del partido ({events.length})</h4>
+                <MatchEventTimeline events={events} statistics={statistics} />
               </div>
             )}
 
@@ -620,7 +915,7 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
                 </thead>
                 <tbody>
                   {analysis.valueTable.map((row) => (
-                    <tr key={row.market} className={row.edge > 3 ? "value" : row.edge < -7 ? "avoid" : ""}>
+                    <tr key={row.market} className={row.edge >= 5 ? "value" : row.edge < -7 ? "avoid" : ""}>
                       <td>{row.market}</td>
                       <td>{row.modelProbability}%</td>
                       <td>{row.marketProbability}%</td>
@@ -669,8 +964,11 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
               <div className="qa-ml-section">
                 <div className="qa-ml-header">
                   <Brain size={16} />
-                  <strong>Predicción ML (Ensemble)</strong>
+                  <strong>ML crudo (diagnóstico)</strong>
                 </div>
+                <p className="qa-muted-copy">
+                  Señal directa del modelo antes de compuertas de consistencia, value, calibración ROI y Kelly.
+                </p>
                 <div className="qa-ml-probs">
                   {mlPrediction.classes.map((cls) => {
                     const prob = mlPrediction.probabilities.ensemble?.[cls] ?? 0;
@@ -685,6 +983,15 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
                       </div>
                     );
                   })}
+                </div>
+                <div className="qa-ml-shap" style={{ marginTop: "0.75rem" }}>
+                  <div className="qa-ml-shap-title">Salida final auditada</div>
+                  <div className="qa-ml-shap-chips">
+                    <span>Local: {analysis.probabilities.homeWin}%</span>
+                    <span>Empate: {analysis.probabilities.draw}%</span>
+                    <span>Visitante: {analysis.probabilities.awayWin}%</span>
+                    <span>{analysis.recommendation.market} · {analysis.recommendation.stakeUnits}u</span>
+                  </div>
                 </div>
                 {mlPrediction.shap?.top_features?.length > 0 && (
                   <div className="qa-ml-shap">
@@ -763,22 +1070,8 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
 
             {events && events.length > 0 && (
               <div className="qa-events-section">
-                <h4><Clock size={16} /> Eventos del Partido ({events.length})</h4>
-                <div className="qa-events-list">
-                  {events.map((ev, i) => (
-                    <div key={i} className={`qa-event-row qa-event-${ev.type.toLowerCase()}`}>
-                      <span className="qa-event-time">{ev.time}{ev.extraTime ? `+${ev.extraTime}` : ""}′</span>
-                      <span className={`qa-event-icon ${ev.type.toLowerCase()}`}>
-                        {ev.type === "Goal" ? "⚽" : ev.detail?.includes("Red") ? "🟥" : ev.detail?.includes("Yellow") ? "🟨" : ev.type === "subst" ? "🔄" : ev.type === "Var" ? "📺" : "•"}
-                      </span>
-                      <div className="qa-event-info">
-                        <strong>{ev.player}</strong>
-                        {ev.assist && <span className="qa-event-assist">({ev.assist})</span>}
-                        <small>{ev.detail} · {ev.team}</small>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <h4><Clock size={16} /> Desarrollo del partido ({events.length})</h4>
+                <MatchEventTimeline events={events} statistics={statistics} />
               </div>
             )}
 
@@ -813,11 +1106,15 @@ export function QuickAnalysisCard({ fixture, onAnalyze, analysis, lineups, event
           </>
         )}
 
+        {activeTab === "plantilla" && (
+          <MatchCenterSquadPanel fixture={fixture} lineups={lineups} />
+        )}
+
         {activeTab === "contexto" && <MatchCenterContextPanel fixture={fixture} analysis={analysis} />}
       </div>
       {/* Actions */}
       <div className="qa-actions">
-        {confidence >= 52 && (
+        {confidence >= CONFIDENCE_THRESHOLDS.caution && (
           <button
             className="qa-btn-primary"
             onClick={handleSavePrediction}
@@ -856,6 +1153,8 @@ function MatchHeader({
 }) {
   const isLive = fixture.status === "live";
   const isFinal = fixture.status === "final";
+  const isPostponed = fixture.status === "postponed";
+  const isCancelled = fixture.status === "cancelled";
   const score = fixture.result;
 
   return (
@@ -875,8 +1174,30 @@ function MatchHeader({
         <div className="qa-info-item">
           {isLive && <span className="qa-live-status">● EN VIVO {fixture.elapsed ? `${fixture.elapsed}'` : ""}</span>}
           {isFinal && <span className="qa-final-status">FINALIZADO</span>}
-          {!isLive && !isFinal && <span className="qa-pre-status">PROGRAMADO</span>}
+          {isPostponed && (
+            <span className="qa-postponed-status" title={fixture.statusLong}>
+              {fixtureStatusLabelEs("postponed", fixture.statusLong).toUpperCase()}
+            </span>
+          )}
+          {isCancelled && (
+            <span className="qa-cancelled-status" title={fixture.statusLong}>
+              {fixtureStatusLabelEs("cancelled", fixture.statusLong).toUpperCase()}
+            </span>
+          )}
+          {!isLive && !isFinal && !isPostponed && !isCancelled && (
+            <span className="qa-pre-status">PROGRAMADO</span>
+          )}
         </div>
+        {fixture.venue?.name && (
+          <div className="qa-info-item">
+            <span>{fixture.venue.name}{fixture.venue.city ? ` · ${fixture.venue.city}` : ""}</span>
+          </div>
+        )}
+        {fixture.weather?.temperatureC != null && (
+          <div className="qa-info-item">
+            <span>{fixture.weather.temperatureC}°C · {fixture.weather.condition ?? "Clima"}{fixture.weather.source === "estimate" ? " (est.)" : ""}</span>
+          </div>
+        )}
       </div>
 
       {/* Teams + score */}
@@ -884,7 +1205,12 @@ function MatchHeader({
         <div className="qa-team">
           {fixture.home.logo && <img src={fixture.home.logo} alt="" className="qa-logo" />}
           <strong>{fixture.home.name}</strong>
-          <button className={`qa-fav-btn ${favoriteTeams.includes(fixture.home.id) ? "active" : ""}`} onClick={() => toggleFav(fixture.home.id)}>
+          <button
+            type="button"
+            className={`qa-fav-btn ${favoriteTeams.includes(fixture.home.id) ? "active" : ""}`}
+            title={favoriteTeams.includes(fixture.home.id) ? "Quitar alertas en vivo" : "Alertas en vivo (gol, tarjeta, penalti)"}
+            onClick={() => toggleFav(fixture.home.id)}
+          >
             <Star size={16} />
           </button>
         </div>
@@ -914,7 +1240,12 @@ function MatchHeader({
         </div>
 
         <div className="qa-team away">
-          <button className={`qa-fav-btn ${favoriteTeams.includes(fixture.away.id) ? "active" : ""}`} onClick={() => toggleFav(fixture.away.id)}>
+          <button
+            type="button"
+            className={`qa-fav-btn ${favoriteTeams.includes(fixture.away.id) ? "active" : ""}`}
+            title={favoriteTeams.includes(fixture.away.id) ? "Quitar alertas en vivo" : "Alertas en vivo (gol, tarjeta, penalti)"}
+            onClick={() => toggleFav(fixture.away.id)}
+          >
             <Star size={16} />
           </button>
           <strong>{fixture.away.name}</strong>

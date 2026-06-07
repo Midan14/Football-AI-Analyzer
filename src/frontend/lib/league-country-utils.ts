@@ -3,6 +3,32 @@ import { buildDashboardUrl } from "@/frontend/lib/calendar-export";
 
 export type LeagueSortKey = "name" | "coverageScore" | "fixturesToday";
 
+export type LeagueCategoryFilter = "all" | NonNullable<League["category"]>;
+
+const LEAGUE_CATEGORY_LABELS: Record<NonNullable<League["category"]>, string> = {
+  men: "Masculino",
+  women: "Femenino",
+  youth: "Juvenil",
+  reserve: "Reservas",
+  cup: "Copa",
+  other: "Otras",
+};
+
+export function leagueCategoryLabelEs(category?: League["category"]): string {
+  if (!category) return "Liga";
+  return LEAGUE_CATEGORY_LABELS[category] ?? category;
+}
+
+export const LEAGUE_CATEGORY_FILTERS: LeagueCategoryFilter[] = [
+  "all",
+  "men",
+  "women",
+  "youth",
+  "reserve",
+  "cup",
+  "other",
+];
+
 export type LeagueWindowMode = "day" | "week";
 
 export function buildLeagueCountryShareUrl(params: {

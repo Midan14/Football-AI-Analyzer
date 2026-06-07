@@ -11,7 +11,9 @@ export function pickFixtureScanCandidates(
   watchlistIds: Set<string>,
   maxScan = FIXTURE_SCAN_BATCH_SIZE
 ): Fixture[] {
-  const onDate = fixtures.filter((f) => f.status !== "final");
+  const onDate = fixtures.filter(
+    (f) => f.status !== "final" && f.status !== "postponed" && f.status !== "cancelled"
+  );
   const watchlist = onDate.filter((f) => watchlistIds.has(f.id));
   const withOdds = onDate.filter((f) => f.market.homeWinOdds > 0);
   const tierRank = (f: Fixture) =>

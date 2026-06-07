@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { computeMetrics } from "@/backend/lib/analysis/performance-metrics";
 
 /**
- * GET /api/performance?groupBy=market|league
+ * GET /api/performance?groupBy=market|league|model&from=YYYY-MM-DD&to=YYYY-MM-DD
  * Returns hit-rate, ROI, Brier score grouped by market or league for the
  * authenticated user's resolved predictions.
  *
@@ -16,13 +16,25 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
   const session = await auth();
   if (!session?.user?.id) return errorResponse(Errors.UNAUTHORIZED);
 
-  const groupByRaw = new URL(request.url).searchParams.get("groupBy") ?? "market";
-  const groupBy: "market" | "league" = groupByRaw === "league" ? "league" : "market";
+  const params = new URL(request.url).searchParams;
+  const groupByRaw = params.get("groupBy") ?? "market";
+  const groupBy: "market" | "league" | "model" =
+    groupByRaw === "league" || groupByRaw === "model" ? groupByRaw : "market";
+  const from = parseDateParam(params.get("from"));
+  const to = parseDateParam(params.get("to"));
 
   const rows = await prisma.prediction.findMany({
     where: {
       userId: session.user.id,
       status: { in: ["WON", "LOST"] },
+      ...(from || to
+        ? {
+            createdAt: {
+              ...(from ? { gte: from } : {}),
+              ...(to ? { lte: to } : {}),
+            },
+          }
+        : {}),
     },
     select: {
       market: true,
@@ -32,6 +44,8 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
       roi: true,
       stakeUnits: true,
       leagueId: true,
+      clvPercent: true,
+      notes: true,
     },
     take: 5000,
   });
@@ -45,9 +59,30 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
       roi: r.roi,
       stakeUnits: r.stakeUnits,
       leagueId: r.leagueId,
+      clvPercent: r.clvPercent,
+      modelKey: extractModelKey(r.notes),
     })),
     groupBy
   );
 
-  return successResponse({ groupBy, sampleSize: rows.length, metrics });
+  return successResponse({
+    groupBy,
+    sampleSize: rows.length,
+    filters: {
+      from: from?.toISOString() ?? null,
+      to: to?.toISOString() ?? null,
+    },
+    metrics,
+  });
 });
+
+function parseDateParam(value: string | null): Date | undefined {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+function extractModelKey(notes: string | null): string {
+  const match = notes?.match(/Modelo:\s*([^.;]+)/i) ?? notes?.match(/Motor:\s*([^.;]+)/i);
+  return match?.[1]?.trim() || "current-engine";
+}

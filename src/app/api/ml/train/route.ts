@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { successResponse, errorResponse, withErrorHandling, Errors } from "@/lib/api-utils";
 import { auth } from "@/auth";
-import { runTraining, runExtraction } from "@/backend/lib/ml/trainer";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { z } from "zod";
 
@@ -34,6 +33,7 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
   }
 
   const { extract, leagueId, limit, trials } = validation.data;
+  const { runTraining, runExtraction } = await import("@/backend/lib/ml/trainer");
 
   // Optionally extract new data before training
   if (extract) {

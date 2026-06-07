@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
 ML Prediction Service — Node.js callable via stdin/stdout
+
+DEPRECATED: This standalone CatBoost/XGB/LGBM stack is legacy. The supported
+single source of truth is the hybrid Dixon-Coles -> XGBoost pipeline under
+`ml-service/` (FastAPI `/predict/hybrid`). This script is only invoked when
+ML_ENABLE_LEGACY_LOCAL=1 and its output is treated as display-only (it never
+overrides the Poisson core in the TypeScript orchestrator).
+
 Usage:
     echo '{"fixture": {...}}' | python3 ml/predict.py
 Output:
@@ -11,7 +18,7 @@ import json
 import sys
 import os
 import warnings
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -145,12 +152,29 @@ def fixture_to_features(fixture: dict) -> pd.DataFrame:
     return pd.DataFrame([row])
 
 
-def encode_for_xgboost_lgbm(df: pd.DataFrame) -> pd.DataFrame:
-    """Label-encode categoricals so XGB/LGBM can consume them."""
+# Deterministic category orderings so single-row inference encodes consistently
+# with training (a fresh LabelEncoder per request produced arbitrary codes —
+# the previous behavior was a correctness bug).
+STABLE_CATEGORY_MAPS: Dict[str, Dict[str, int]] = {
+    "coverageTier": {"basic": 0, "standard": 1, "elite": 2, "premium": 3},
+    "weatherRisk": {"low": 0, "medium": 1, "high": 2},
+    "refereeStrictness": {"lenient": 0, "medium": 1, "strict": 2},
+    "homeKeyPlayerStatus": {"available": 0, "doubt": 1, "injured": 2, "suspended": 3},
+    "awayKeyPlayerStatus": {"available": 0, "doubt": 1, "injured": 2, "suspended": 3},
+}
+
+
+def encode_for_xgboost_lgbm(df: pd.DataFrame, meta: Optional[dict] = None) -> pd.DataFrame:
+    """Encode categoricals with a STABLE mapping (training-consistent).
+
+    Prefers `meta['categorical_maps']` when the trained model persisted one;
+    otherwise falls back to STABLE_CATEGORY_MAPS. Unknown categories map to 0.
+    """
+    maps = (meta or {}).get("categorical_maps") or STABLE_CATEGORY_MAPS
     df_enc = df.copy()
     for col in CATEGORICAL_FEATURES:
-        le = LabelEncoder()
-        df_enc[col] = le.fit_transform(df_enc[col].astype(str))
+        mapping = maps.get(col, STABLE_CATEGORY_MAPS.get(col, {}))
+        df_enc[col] = df_enc[col].astype(str).map(lambda v: mapping.get(v, 0))
     return df_enc
 
 
@@ -167,7 +191,7 @@ def align_feature_columns(df: pd.DataFrame, meta: dict) -> pd.DataFrame:
 
 def predict(fixture: dict, models: dict, meta: dict):
     df = align_feature_columns(fixture_to_features(fixture), meta)
-    df_enc = encode_for_xgboost_lgbm(df)
+    df_enc = encode_for_xgboost_lgbm(df, meta)
 
     classes = meta.get("classes", ["AWAY_WIN", "DRAW", "HOME_WIN"])
     probabilities = {}
@@ -193,6 +217,23 @@ def predict(fixture: dict, models: dict, meta: dict):
     for p in probabilities.values():
         all_probs.append([p[c] for c in classes])
     ensemble = np.mean(all_probs, axis=0)
+
+    # Apply calibration if present in meta.json
+    if "calibration" in meta and meta["calibration"]:
+        try:
+            params = meta["calibration"]
+            calibrated = np.zeros_like(ensemble)
+            for c in range(len(classes)):
+                p_val = min(1.0 - 1e-5, max(1e-5, float(ensemble[c])))
+                logit = np.log(p_val / (1.0 - p_val))
+                calibrated[c] = 1.0 / (1.0 + np.exp(params[c]["A"] * logit + params[c]["B"]))
+            
+            total_cal = calibrated.sum()
+            if total_cal > 0:
+                ensemble = calibrated / total_cal
+        except Exception:
+            pass
+
     probabilities["ensemble"] = {cls: round(float(ensemble[i]), 4) for i, cls in enumerate(classes)}
 
     # Best class

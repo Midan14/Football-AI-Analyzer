@@ -11,6 +11,10 @@ import {
   computeAllGoalMarkets,
   buildValueTable,
   analyzeH2H,
+  getBookmakerOdds,
+  expectedValuePerUnit,
+  meetsMinimumOdds,
+  isBlockedHeavyFavorite,
 } from "./shared-math";
 import {
   computeConfidence,
@@ -19,6 +23,7 @@ import {
   applyContextualPenalties,
   floorBlackSwanProb,
 } from "./risk-policy";
+import { pickBestMarket } from "./market-picker";
 
 type ValueRow = DeepAnalysisResult["valueTable"][number];
 
@@ -167,28 +172,18 @@ export function analyzeFixtureDeep(fixture: Fixture): DeepAnalysisResult {
 
   const valueTable = buildValueTable(probabilities, fixture);
 
-  // Pick best market: balance edge, conviction, and odds attractiveness
-  const attractiveMarkets = valueTable
-    .filter((row) => {
-      const impliedOdds = 100 / row.modelProbability;
-      return row.edge > 0 && impliedOdds >= 1.4 && impliedOdds <= 8.0;
-    })
-    .sort((a, b) => {
-      const scoreA = a.edge * Math.sqrt(a.modelProbability);
-      const scoreB = b.edge * Math.sqrt(b.modelProbability);
-      return scoreB - scoreA;
-    });
+  const picked = pickBestMarket(valueTable, probabilities, fixture, confidenceScore);
+  const best = picked.row;
 
-  const best = attractiveMarkets[0]
-    ?? valueTable.filter((row) => row.edge > 0).sort((a, b) => b.edge - a.edge)[0]
-    ?? valueTable.sort((a, b) => b.edge - a.edge)[0]
-    ?? fallbackMarket(probabilities);
-
-  // --- Monte Carlo híbrido para dinero real ---
+  // --- Monte Carlo híbrido / Markov Chain para dinero real ---
   const configuredIterations = Number(process.env.DEEP_MONTE_CARLO_ITERATIONS ?? 50000);
   const iterations = Math.max(1000, Math.min(100000, Number.isFinite(configuredIterations) ? configuredIterations : 50000));
   const heavyTailMix = fixture.context.lowDivision || fixture.coverage.tier === "low" ? 0.2 : 0.12;
   const rng = createSeededRng(`${fixture.id}:${round2(xg.home)}:${round2(xg.away)}`);
+  
+  const simExpectedCorners = 8.4 + (xg.home + xg.away) * 0.9 + (fixture.context.psychologicalPressure || 0) * 0.015;
+  const simExpectedCards = Number(fixture.referee?.avgCards ?? 3.5);
+
   const homeDist: number[] = [];
   const awayDist: number[] = [];
   const scoreCounts = new Map<string, number>();
@@ -198,8 +193,49 @@ export function analyzeFixtureDeep(fixture: Fixture): DeepAnalysisResult {
 
   for (let i = 0; i < iterations; i += 1) {
     const useHeavyTail = rng() < heavyTailMix;
-    const h = useHeavyTail ? negativeBinomialSample(xg.home, 2.2, rng) : poissonSample(xg.home, rng);
-    const a = useHeavyTail ? negativeBinomialSample(xg.away, 2.2, rng) : poissonSample(xg.away, rng);
+    let h = 0;
+    let a = 0;
+    let corners = 0;
+    let cards = 0;
+    let hawkesTension = 0;
+
+    if (!useHeavyTail) {
+      // Minute-by-minute Markov Chain simulation
+      for (let m = 1; m <= 90; m++) {
+        // Fatigue decays corners and increases cards
+        const minuteFactor = m / 90;
+        
+        // Game State tension (teams chasing goals increase pressure)
+        const chasingHomeBoost = a > h ? 0.25 * minuteFactor : 0;
+        const chasingAwayBoost = h > a ? 0.25 * minuteFactor : 0;
+        
+        // Decay hawkes tension
+        hawkesTension *= 0.94;
+
+        // Transition hazards
+        const homeGoalHazard = (xg.home / 90) * (1 + chasingHomeBoost);
+        const awayGoalHazard = (xg.away / 90) * (1 + chasingAwayBoost);
+        const cornerHazard = (simExpectedCorners / 90) * (1 - 0.12 * minuteFactor);
+        const cardHazard = (simExpectedCards / 90) * (1 + 0.35 * minuteFactor + hawkesTension * 0.5);
+
+        const r = rng();
+        if (r < homeGoalHazard) {
+          h += 1;
+        } else if (r < homeGoalHazard + awayGoalHazard) {
+          a += 1;
+        } else if (r < homeGoalHazard + awayGoalHazard + cornerHazard) {
+          corners += 1;
+        } else if (r < homeGoalHazard + awayGoalHazard + cornerHazard + cardHazard) {
+          cards += 1;
+          hawkesTension += 0.8;
+        }
+      }
+    } else {
+      // Heavy tail (student-t / negative binomial proxy) to match historical extreme values
+      h = negativeBinomialSample(xg.home, 2.2, rng);
+      a = negativeBinomialSample(xg.away, 2.2, rng);
+    }
+
     if (i < 100) {
       homeDist.push(h);
       awayDist.push(a);
@@ -315,29 +351,28 @@ export function analyzeFixtureDeep(fixture: Fixture): DeepAnalysisResult {
   // Find the BEST market to bet on, not just the highest probability.
   // A "safe" market must have: decent odds (>= 1.4 fair odds), positive edge, and good conviction.
   // Under 3.5 @ 1.1 is NOT a useful recommendation even if probability is 90%.
-  const allMarketRows = [...valueTable].sort((a, b) => {
-    // Score = edge * sqrt(modelProbability) * odds attractiveness
-    const oddsA = 100 / a.modelProbability;
-    const oddsB = 100 / b.modelProbability;
-    const scoreA = a.edge * Math.sqrt(a.modelProbability) * (oddsA >= 1.5 ? 1.2 : oddsA >= 1.3 ? 0.8 : 0.4);
-    const scoreB = b.edge * Math.sqrt(b.modelProbability) * (oddsB >= 1.5 ? 1.2 : oddsB >= 1.3 ? 0.8 : 0.4);
-    return scoreB - scoreA;
-  });
+  const allMarketRows = [...valueTable]
+    .filter((row) => row.marketProbability > 0 && row.edge > 0)
+    .sort((a, b) => {
+      const oddsA = getBookmakerOdds(fixture, a.market);
+      const oddsB = getBookmakerOdds(fixture, b.market);
+      return expectedValuePerUnit(b.modelProbability, oddsB) - expectedValuePerUnit(a.modelProbability, oddsA);
+    });
 
   let safeMarket: DeepAnalysisResult["safeMarket"];
 
-  // Priority 1: High edge + attractive odds (fair odds >= 1.5)
-  const premiumRow = allMarketRows.find(
-    (row) => row.edge > 3 && (100 / row.modelProbability) >= 1.5 && row.modelProbability >= 30
-  );
-  // Priority 2: Good edge + moderate odds (fair odds >= 1.3)
-  const goodRow = allMarketRows.find(
-    (row) => row.edge > 2 && (100 / row.modelProbability) >= 1.3 && row.modelProbability >= 40
-  );
-  // Priority 3: Any positive edge with decent probability
-  const fallbackRow = allMarketRows.find(
-    (row) => row.edge > 0 && row.modelProbability >= 50
-  );
+  const premiumRow = allMarketRows.find((row) => {
+    const odds = getBookmakerOdds(fixture, row.market);
+    return meetsMinimumOdds(row.market, odds) && !isBlockedHeavyFavorite(row.market, odds, row.edge) && row.edge > 3;
+  });
+  const goodRow = allMarketRows.find((row) => {
+    const odds = getBookmakerOdds(fixture, row.market);
+    return meetsMinimumOdds(row.market, odds) && !isBlockedHeavyFavorite(row.market, odds, row.edge) && row.edge > 2 && row.modelProbability >= 40;
+  });
+  const fallbackRow = allMarketRows.find((row) => {
+    const odds = getBookmakerOdds(fixture, row.market);
+    return meetsMinimumOdds(row.market, odds) && !isBlockedHeavyFavorite(row.market, odds, row.edge) && row.edge > 0 && row.modelProbability >= 50;
+  });
 
   if (premiumRow) {
     const fairOdds = (100 / premiumRow.modelProbability).toFixed(2);

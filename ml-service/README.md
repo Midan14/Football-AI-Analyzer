@@ -138,12 +138,32 @@ Ejecuta Prophet, ARIMA, MLflow, Evidently, survival, QAOA, etc. sobre un fixture
 La app Next.js llama a este endpoint en cada análisis cuando `ML_SERVICE_URL` responde.
 Si el servicio está apagado, se usan los fallbacks TypeScript ya existentes.
 
-## Integración con Next.js
+## Integración con Next.js (arranque automático)
 
-La app Next.js consulta este servicio en `http://localhost:8000/predict`.
-Si el servicio no está corriendo, la app usa solo los modelos estadísticos (Poisson, etc.).
+Al analizar un partido (`GET /api/analyze/:id`), la app **intenta levantar ml-service sola** si:
 
-Variable de entorno en `.env.local`:
+- `ML_SERVICE_URL` apunta a `localhost` / `127.0.0.1`
+- `ML_SERVICE_AUTO_START` no es `"false"` (activo por defecto en desarrollo)
+
+Si no existe `ml-service/venv`, con `ML_SERVICE_BOOTSTRAP=true` crea el venv e instala
+`requirements-minimal.txt` la primera vez (~1–3 min). Luego ejecuta uvicorn en el puerto 8000.
+
+Variables en `.env.local`:
+
 ```
 ML_SERVICE_URL=http://localhost:8000
+ML_SERVICE_AUTO_START=true
+ML_SERVICE_BOOTSTRAP=true
 ```
+
+Comprobar estado: `GET /api/ml/status` o `curl http://localhost:8000/health`.
+
+### Arranque manual (opcional)
+
+```bash
+cd ml-service
+source venv/bin/activate
+uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Con Docker Compose, el servicio `ml-service` ya corre en el puerto 8000 (`ML_SERVICE_AUTO_START=false` en la app).

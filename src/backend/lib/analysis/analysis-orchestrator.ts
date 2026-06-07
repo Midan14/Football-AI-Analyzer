@@ -9,20 +9,39 @@ import { analyzeFixture } from "./analysis-engine";
 import { mergeExtendedModels, type ExtendedMLResponse } from "./merge-extended-models";
 import { getExtendedMLPrediction } from "./ml-client";
 import { buildExtendedStatisticalPack } from "./models/extended-statistical-pack";
-import { buildMLStatsPayload, predictWithML, type MLPrediction } from "@/backend/lib/ml/predictor";
+import { buildMultiMarketLayer } from "./models/multi-market-layer";
+import { ensureMLServiceRunning } from "@/backend/lib/ml/ml-service-manager";
+import { pickBestMarket } from "@/backend/lib/analysis/market-picker";
+import { buildMLStatsPayload, predictWithML, type HybridMLPrediction, type MLPrediction } from "@/backend/lib/ml/predictor";
 import { applyAnalysisPreferences } from "./apply-analysis-preferences";
 import { buildAnalysisPipelineStatus, type AnalysisPipelineStatus } from "@/shared/analysis-pipeline";
 import { buildValueTable, round1 } from "./shared-math";
 import { kellyPortfolio } from "./models/kelly-criterion";
+import {
+  applyRoiCalibration,
+  shouldAbstainRecommendation,
+  type CalibrationGroupMetrics,
+} from "./roi-calibration";
+import { reconcileHybridProbabilities } from "./hybrid-consistency";
+import { predictionMarketKey } from "@/shared/prediction-market-mapping";
 
 type AnalyzeOptions = {
   events?: MatchEvent[];
   preferences?: AnalysisPreferences;
+  roiCalibration?: RoiCalibrationContext;
 };
 
+export type RoiCalibrationContext = {
+  marketMetrics?: CalibrationGroupMetrics | null;
+  leagueMetrics?: CalibrationGroupMetrics | null;
+  globalMetrics?: CalibrationGroupMetrics | null;
+};
+
+// The decorative "extended" models (Prophet/quantum/GNN/etc.) have no measured
+// predictive validity, so they no longer influence 1X2 probabilities (display only).
 const ML_BLEND_WEIGHT = 0.38;
-const EXT_BLEND_WEIGHT = 0.17;
-const TS_BLEND_WEIGHT = 0.45;
+const EXT_BLEND_WEIGHT = 0;
+const TS_BLEND_WEIGHT = 0.62;
 
 function roundProb(n: number) {
   return Math.round(n * 10) / 10;
@@ -41,6 +60,7 @@ function normalizeTriplet(h: number, d: number, a: number) {
 export function ensureAdvancedModelsComplete(analysis: AnalysisResult, fixture: Fixture): AnalysisResult {
   if (!analysis.advancedModels) {
     const pack = buildExtendedStatisticalPack(fixture, 1.3, 1.1, analysis.probabilities);
+    const multiMarket = buildMultiMarketLayer(fixture, analysis);
     return {
       ...analysis,
       advancedModels: {
@@ -119,12 +139,15 @@ export function ensureAdvancedModelsComplete(analysis: AnalysisResult, fixture: 
         explainability: pack.explainability,
         featureEngineering: pack.featureEngineering,
         autoMl: pack.autoMl,
+        multiMarket,
+        modelSources: { multiMarket: "typescript-multi-market-layer" },
       },
     };
   }
 
   const adv = analysis.advancedModels;
   const pack = buildExtendedStatisticalPack(fixture, adv.xgModel?.homeXg ?? 1.3, adv.xgModel?.awayXg ?? 1.1, analysis.probabilities);
+  const multiMarket = buildMultiMarketLayer(fixture, analysis);
   return {
     ...analysis,
     advancedModels: {
@@ -136,6 +159,11 @@ export function ensureAdvancedModelsComplete(analysis: AnalysisResult, fixture: 
       explainability: adv.explainability ?? pack.explainability,
       featureEngineering: adv.featureEngineering ?? pack.featureEngineering,
       autoMl: adv.autoMl ?? pack.autoMl,
+      multiMarket: adv.multiMarket ?? multiMarket,
+      modelSources: {
+        ...adv.modelSources,
+        multiMarket: adv.modelSources?.multiMarket ?? "typescript-multi-market-layer",
+      },
       timeSeries: {
         ...adv.timeSeries,
         sarimaHomeWin: adv.timeSeries.sarimaHomeWin ?? pack.sarima.sarimaHomeWin,
@@ -202,8 +230,193 @@ function mergeMLExplainability(analysis: AnalysisResult, ml: MLPrediction): Anal
   };
 }
 
+function isHybridPrediction(ml: MLPrediction | null): ml is HybridMLPrediction {
+  return ml?.source === "hybrid";
+}
+
 /**
- * Weighted blend: TS ensemble + extended temporal + ML (when present).
+ * Hybrid pipeline output replaces blend — single coherent motor (DC → XGB → markets).
+ */
+export function applyHybridAnalysis(
+  base: AnalysisResult,
+  fixture: Fixture,
+  hybrid: HybridMLPrediction
+): AnalysisResult {
+  const e = hybrid.probabilities.ensemble;
+  const reconciled = reconcileHybridProbabilities({
+    fixture,
+    hybridProbabilities: {
+      homeWin: e.HOME_WIN ?? base.probabilities.homeWin,
+      draw: e.DRAW ?? base.probabilities.draw,
+      awayWin: e.AWAY_WIN ?? base.probabilities.awayWin,
+    },
+    dixonColes: {
+      lambdaHome: hybrid.dixonColes.lambda_local,
+      lambdaAway: hybrid.dixonColes.mu_visitante,
+      rho: hybrid.dixonColes.rho,
+    },
+    modelAgreement: hybrid.confidence,
+  });
+  const newProbabilities = {
+    ...base.probabilities,
+    homeWin: roundProb(reconciled.probabilities.homeWin),
+    draw: roundProb(reconciled.probabilities.draw),
+    awayWin: roundProb(reconciled.probabilities.awayWin),
+    over25: roundProb(hybrid.over_25.over),
+    btts: roundProb(hybrid.btts.yes),
+  };
+
+  const newValueTable = buildValueTable(newProbabilities, fixture);
+  const picked = pickBestMarket(newValueTable, newProbabilities, fixture, hybrid.confidence);
+  const best = picked.row;
+  const bestFairOdds = best.modelProbability > 0 ? round1(100 / best.modelProbability) : 0;
+  const newKelly = kellyPortfolio(
+    newValueTable.filter((r) => r.edge > 0),
+    fixture,
+    hybrid.confidence
+  );
+
+  const markets = hybrid.markets as {
+    ExactScore?: Array<{ score: string; probability: number }>;
+    AsianHandicap?: Record<string, { Home?: number; Away?: number }>;
+    ValueBets?: Array<{ market: string; modelProbability: number; marketProbability: number; edge: number; odds?: number }>;
+  };
+
+  const adv = base.advancedModels;
+  const consistencyNote =
+    reconciled.flags.length > 0
+      ? " Compuerta de consistencia: 1X2 reconciliado con Dixon-Coles y mercado disponible por contradiccion fuerte."
+      : "";
+  const recommendationRationale =
+    best.market === "Sin valor claro"
+      ? `Sin valor claro: no hay cuota real con edge y Kelly positivo. Híbrido DC→XGB (λ=${hybrid.dixonColes.lambda_local}, μ=${hybrid.dixonColes.mu_visitante}).${consistencyNote}`
+      : `${best.market}: Híbrido DC→XGB (λ=${hybrid.dixonColes.lambda_local}, μ=${hybrid.dixonColes.mu_visitante}) — modelo ${best.modelProbability}% vs mercado ${best.marketProbability}% (edge +${best.edge}%).${consistencyNote}`;
+  return {
+    ...base,
+    probabilities: newProbabilities,
+    valueTable: newValueTable,
+    recommendation: {
+      market: best.market,
+      fairOdds: bestFairOdds,
+      minimumOdds: round1(bestFairOdds * 1.05),
+      stakeUnits: picked.actionable && picked.kellyBet ? Math.min(picked.kellyBet.stakeUnits, base.recommendation.stakeUnits) : 0,
+      rationale: recommendationRationale,
+    },
+    ensemble: base.ensemble
+      ? {
+          ...base.ensemble,
+          homeWin: newProbabilities.homeWin,
+          draw: newProbabilities.draw,
+          awayWin: newProbabilities.awayWin,
+          dominantModel: "Hybrid DC→XGB",
+          modelAgreement: Math.round(hybrid.confidence),
+        }
+      : undefined,
+    kelly: base.kelly
+      ? {
+          bets: newKelly.bets.map((b) => ({
+            market: b.market,
+            edge: b.edge,
+            stakeUnits: b.stakeUnits,
+            expectedValue: b.expectedValue,
+            riskLevel: b.riskLevel,
+            recommendation: b.recommendation,
+          })),
+          totalExposure: newKelly.totalExposure,
+          expectedROI: newKelly.expectedROI,
+          sharpeRatio: newKelly.sharpeRatio,
+        }
+      : undefined,
+    advancedModels: adv
+      ? {
+          ...adv,
+          dixonColes: {
+            ...adv.dixonColes,
+            rho: hybrid.dixonColes.rho,
+          },
+          hierarchical: {
+            ...adv.hierarchical,
+            lambdaHome: hybrid.dixonColes.lambda_local,
+            lambdaAway: hybrid.dixonColes.mu_visitante,
+            expectedTotalGoals: hybrid.dixonColes.expected_total_goals,
+            homeWin: newProbabilities.homeWin,
+            draw: newProbabilities.draw,
+            awayWin: newProbabilities.awayWin,
+          },
+          hybridPipeline: {
+            active: true,
+            pipeline: hybrid.pipeline,
+            lambdaLocal: hybrid.dixonColes.lambda_local,
+            muVisitante: hybrid.dixonColes.mu_visitante,
+            rho: hybrid.dixonColes.rho,
+            modelsUsed: hybrid.models_used,
+            exactScoreTop: markets.ExactScore?.slice(0, 6) ?? [],
+            asianHandicap: markets.AsianHandicap ?? {},
+            valueBets: markets.ValueBets ?? [],
+            consistencyFlags: reconciled.flags,
+            dixonColes1x2: reconciled.dixonColesProbabilities,
+            marketPrior1x2: reconciled.marketPrior,
+          },
+          explainability: {
+            topDrivers:
+              hybrid.shap?.top_features?.map((f) => ({
+                feature: f.feature,
+                impact: Math.round(f.impact * 1000) / 10,
+              })) ?? adv.explainability.topDrivers,
+            method: hybrid.hybridReady ? "hybrid-xgb-shap" : "dixon-coles-fallback",
+            dominantOutcome: hybrid.prediction,
+          },
+        }
+      : undefined,
+  };
+}
+
+/**
+ * Display-only merge of the hybrid goal model (λ/μ, rho) when the model has NOT
+ * passed its quality gate. Probabilities are left as the trusted Poisson core —
+ * the untrusted XGBoost never overwrites them, it only annotates the payload.
+ */
+export function attachHybridGoalModelDisplay(
+  base: AnalysisResult,
+  hybrid: HybridMLPrediction
+): AnalysisResult {
+  const adv = base.advancedModels;
+  if (!adv) return base;
+  return {
+    ...base,
+    advancedModels: {
+      ...adv,
+      dixonColes: { ...adv.dixonColes, rho: hybrid.dixonColes.rho },
+      hierarchical: {
+        ...adv.hierarchical,
+        lambdaHome: hybrid.dixonColes.lambda_local,
+        lambdaAway: hybrid.dixonColes.mu_visitante,
+        expectedTotalGoals: hybrid.dixonColes.expected_total_goals,
+      },
+      hybridPipeline: {
+        active: false,
+        pipeline: hybrid.pipeline,
+        lambdaLocal: hybrid.dixonColes.lambda_local,
+        muVisitante: hybrid.dixonColes.mu_visitante,
+        rho: hybrid.dixonColes.rho,
+        modelsUsed: hybrid.models_used,
+        exactScoreTop: [],
+        asianHandicap: {},
+        valueBets: [],
+        consistencyFlags: ["hybrid_quality_gate_not_passed"],
+        dixonColes1x2: {
+          homeWin: base.probabilities.homeWin,
+          draw: base.probabilities.draw,
+          awayWin: base.probabilities.awayWin,
+        },
+        marketPrior1x2: null,
+      },
+    },
+  };
+}
+
+/**
+ * Weighted blend: TS ensemble + ML (when a trusted model is present).
  * Also merges ML over25 / BTTS into probabilities.
  */
 export function blendMultiModelAnalysis(
@@ -233,11 +446,12 @@ export function blendMultiModelAnalysis(
     draw = TS_BLEND_WEIGHT * tsDraw + EXT_BLEND_WEIGHT * extDraw + ML_BLEND_WEIGHT * mlDraw;
     awayWin =
       TS_BLEND_WEIGHT * tsAway + EXT_BLEND_WEIGHT * extAway + ML_BLEND_WEIGHT * mlAway;
-  } else if (adv?.temporalBlend) {
-    homeWin = 0.65 * tsHome + 0.35 * extHome;
-    draw = 0.65 * tsDraw + 0.35 * extDraw;
-    awayWin = 0.65 * tsAway + 0.35 * extAway;
   }
+  // Without a trusted ML model, the Poisson/Dixon-Coles core (tsHome/Draw/Away)
+  // stands on its own — the extended statistical pack is no longer blended in.
+  void extHome;
+  void extDraw;
+  void extAway;
 
   const blended1x2 = normalizeTriplet(homeWin, draw, awayWin);
 
@@ -260,14 +474,15 @@ export function blendMultiModelAnalysis(
   };
 
   const newValueTable = buildValueTable(newProbabilities, fixture);
-  const best = pickBestMarket(newValueTable, newProbabilities);
-  const bestFairOdds = round1(100 / Math.max(1, best.modelProbability));
+  const picked = pickBestMarket(newValueTable, newProbabilities, fixture, base.confidence.score);
+  const best = picked.row;
+  const bestFairOdds = best.modelProbability > 0 ? round1(100 / best.modelProbability) : 0;
   const newKelly = kellyPortfolio(
     newValueTable.filter((r) => r.edge > 0),
     fixture,
     base.confidence.score
   );
-  const hasActionableMarket = best.marketProbability > 0 && best.edge > 0 && newKelly.bets.length > 0;
+  const hasActionableMarket = picked.actionable;
 
   const modelLabel = ml
     ? `Multi-modelo TS+Ext+ML (${ml.models_used.join(", ") || "ensemble"})`
@@ -281,8 +496,8 @@ export function blendMultiModelAnalysis(
       market: best.market,
       fairOdds: bestFairOdds,
       minimumOdds: round1(bestFairOdds * 1.05),
-      stakeUnits: hasActionableMarket
-        ? Math.min(newKelly.bets[0]?.stakeUnits ?? 0, base.recommendation.stakeUnits)
+      stakeUnits: hasActionableMarket && picked.kellyBet
+        ? Math.min(picked.kellyBet.stakeUnits, base.recommendation.stakeUnits)
         : 0,
       rationale: `${best.market}: ${modelLabel} — modelo ${best.modelProbability}% vs mercado ${best.marketProbability}% (edge +${best.edge}%).`,
     },
@@ -316,26 +531,71 @@ export function blendMultiModelAnalysis(
   };
 }
 
-// Re-export pickBestMarket helper used above — import from engine internals
-function pickBestMarket(
-  valueTable: AnalysisResult["valueTable"],
-  probabilities: AnalysisResult["probabilities"]
-): AnalysisResult["valueTable"][number] {
-  const attractiveMarkets = valueTable
-    .filter((row) => {
-      const impliedOdds = 100 / row.modelProbability;
-      return row.marketProbability > 0 && row.edge > 0 && impliedOdds >= 1.4 && impliedOdds <= 8.0;
-    })
-    .sort((a, b) => b.edge * Math.sqrt(b.modelProbability) - a.edge * Math.sqrt(a.modelProbability));
+export function applyRoiCalibrationToAnalysis(
+  analysis: AnalysisResult,
+  fixture: Fixture,
+  context?: RoiCalibrationContext
+): AnalysisResult {
+  if (!context) return analysis;
+  const marketKey = predictionMarketKey(analysis.recommendation.market);
+  const row = analysis.valueTable.find((r) => r.market === analysis.recommendation.market);
+  const rawProbability = row?.modelProbability ?? analysis.confidence.score;
+  const edge = row?.edge ?? 0;
+  const calibration = applyRoiCalibration({
+    rawProbability,
+    marketKey,
+    leagueId: fixture.leagueId,
+    marketMetrics: context.marketMetrics,
+    leagueMetrics: context.leagueMetrics,
+    globalMetrics: context.globalMetrics,
+  });
+  const abstention = shouldAbstainRecommendation({
+    market: analysis.recommendation.market,
+    stakeUnits: analysis.recommendation.stakeUnits,
+    rawProbability,
+    calibratedProbability: calibration.calibratedProbability,
+    edge,
+    marketMetrics: context.marketMetrics,
+  });
 
-  if (attractiveMarkets[0]) return attractiveMarkets[0];
-  const withEdge = valueTable.filter((r) => r.marketProbability > 0 && r.edge > 0).sort((a, b) => b.edge - a.edge);
-  if (withEdge[0]) return withEdge[0];
-  return valueTable.sort((a, b) => b.edge - a.edge)[0] ?? {
-    market: "1X2 Local",
-    modelProbability: probabilities.homeWin,
-    marketProbability: 0,
-    edge: 0,
+  const advancedModels = analysis.advancedModels
+    ? {
+        ...analysis.advancedModels,
+        calibration: {
+          rawProbability: calibration.rawProbability,
+          calibratedProbability: calibration.calibratedProbability,
+          adjustment: calibration.adjustment,
+          source: calibration.source,
+          reliability: calibration.reliability,
+          sampleSize: calibration.sampleSize,
+          abstained: abstention.abstain,
+          reason: abstention.abstain ? abstention.reason : calibration.reason,
+        },
+      }
+    : analysis.advancedModels;
+
+  if (!abstention.abstain) {
+    return {
+      ...analysis,
+      recommendation: {
+        ...analysis.recommendation,
+        stakeUnits: abstention.adjustedStakeUnits,
+        rationale: `${analysis.recommendation.rationale} Calibracion ROI: ${calibration.reason}`,
+      },
+      advancedModels,
+    };
+  }
+
+  return {
+    ...analysis,
+    recommendation: {
+      market: "Sin valor claro",
+      fairOdds: 0,
+      minimumOdds: 0,
+      stakeUnits: 0,
+      rationale: `${abstention.reason} Probabilidad calibrada ${calibration.calibratedProbability}% (${calibration.reason})`,
+    },
+    advancedModels,
   };
 }
 
@@ -358,8 +618,9 @@ export async function runFullAnalysis(
   analysis = ensureAdvancedModelsComplete(analysis, fixture);
 
   let extendedMerged = false;
+  const mlServiceReady = await ensureMLServiceRunning();
   try {
-    const extended = await fetchExtendedModels(fixture, analysis);
+    const extended = mlServiceReady ? await fetchExtendedModels(fixture, analysis) : null;
     if (extended) {
       analysis = mergeExtendedModels(analysis, extended);
       extendedMerged = true;
@@ -378,20 +639,43 @@ export async function runFullAnalysis(
   }
 
   let mlBlended = false;
-  if (mlPrediction?.probabilities?.ensemble) {
+  if (isHybridPrediction(mlPrediction)) {
     analysis = mergeMLExplainability(analysis, mlPrediction);
-    analysis = blendMultiModelAnalysis(analysis, fixture, mlPrediction);
-    mlBlended = true;
-  } else if (advHasExtendedBlend(analysis)) {
-    analysis = blendMultiModelAnalysis(analysis, fixture, null);
-    mlBlended = true;
+    if (mlPrediction.qualityGatePassed) {
+      // Trusted, backtested + calibrated model: blend into probabilities.
+      analysis = applyHybridAnalysis(analysis, fixture, mlPrediction);
+      mlBlended = true;
+    } else {
+      // Untrusted model (synthetic / failed backtest): keep the Poisson core
+      // as the answer and only surface λ/μ + explainability for transparency.
+      analysis = attachHybridGoalModelDisplay(analysis, mlPrediction);
+    }
+  } else if (mlPrediction?.probabilities?.ensemble) {
+    // Legacy / heuristic ensemble is not quality-gated → display only, never
+    // overwrites the Poisson probabilities.
+    analysis = mergeMLExplainability(analysis, mlPrediction);
   }
 
   if (options?.preferences) {
     analysis = applyAnalysisPreferences(analysis, options.preferences);
   }
 
+  analysis = applyRoiCalibrationToAnalysis(analysis, fixture, options?.roiCalibration);
+
   analysis = ensureAdvancedModelsComplete(analysis, fixture);
+  if (analysis.advancedModels) {
+    analysis = {
+      ...analysis,
+      advancedModels: {
+        ...analysis.advancedModels,
+        multiMarket: buildMultiMarketLayer(fixture, analysis, options?.events),
+        modelSources: {
+          ...analysis.advancedModels.modelSources,
+          multiMarket: "typescript-multi-market-layer",
+        },
+      },
+    };
+  }
 
   const analysisPipeline = buildAnalysisPipelineStatus({
     analysis,
@@ -403,6 +687,3 @@ export async function runFullAnalysis(
   return { analysis, mlPrediction, extendedMerged, mlBlended, analysisPipeline };
 }
 
-function advHasExtendedBlend(analysis: AnalysisResult): boolean {
-  return Boolean(analysis.advancedModels?.temporalBlend);
-}

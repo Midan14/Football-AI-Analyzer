@@ -32,10 +32,15 @@ export const GET = withErrorHandling(async (_request: NextRequest) => {
     select: { status: true, roi: true, stakeUnits: true },
   });
 
-  const totalWon = predictions.filter(p => p.status === "WON").reduce((s, p) => s + (p.roi || 0), 0);
-  const totalLost = predictions.filter(p => p.status === "LOST").reduce((s, p) => s + Math.abs(p.roi || 0), 0);
+  const totalWon = predictions
+    .filter((p) => p.status === "WON")
+    .reduce((s, p) => s + (p.roi || 0), 0);
+  const totalLost = predictions
+    .filter((p) => p.status === "LOST")
+    .reduce((s, p) => s + Math.abs(p.roi || 0), 0);
   const netProfit = totalWon - totalLost;
-  const roiPct = predictions.length > 0 ? (netProfit / predictions.length) : 0;
+  const totalStake = predictions.reduce((sum, p) => sum + (p.stakeUnits || 0), 0);
+  const roiPct = totalStake > 0 ? (netProfit / totalStake) * 100 : 0;
 
   return successResponse({
     bankroll: user.bankroll,
@@ -44,7 +49,7 @@ export const GET = withErrorHandling(async (_request: NextRequest) => {
     totalLost,
     netProfit: Math.round(netProfit * 100) / 100,
     roi: Math.round(roiPct * 100) / 100,
-    maxRecommendedStake: Math.round(user.bankroll * 0.05 * 100) / 100, // 5% max
+    maxRecommendedStake: Math.round(user.bankroll * 0.01 * 100) / 100, // 1% max
     unitSize: Math.round(user.bankroll * 0.01 * 100) / 100, // 1% = 1 unit
   });
 });

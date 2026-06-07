@@ -5,7 +5,8 @@ import type { KeyboardEvent } from "react";
 import { AlertTriangle, Search, Star } from "lucide-react";
 import type { Country, Fixture } from "@/shared/domain";
 import type { FixtureInsight } from "@/frontend/hooks/use-dashboard-summary";
-import { todayIsoDateColombia } from "@/frontend/lib/date-utils";
+import { formatKickoffTimeColombia, todayIsoDateColombia } from "@/frontend/lib/date-utils";
+import { CONFIDENCE_THRESHOLDS } from "@/shared/confidence-thresholds";
 
 type FixturesBoardProps = {
   fixtures: Fixture[];
@@ -28,6 +29,7 @@ const POPULAR_LEAGUES = [
   "Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1",
   "Eredivisie", "Liga MX", "MLS", "Champions League", "Europa League",
 ];
+const VALUE_EDGE_THRESHOLD = 5;
 
 function leaguePriority(leagueName: string): number {
   const idx = POPULAR_LEAGUES.findIndex((name) =>
@@ -82,8 +84,9 @@ export function FixturesBoard({
       if (listFilter === "watchlist" && !starred.has(f.id)) return false;
       if (listFilter === "with-odds" && f.market.homeWinOdds <= 0) return false;
       const insight = insightMap?.get(f.id);
-      if (listFilter === "value" && (!insight || insight.topEdge < 3)) return false;
-      if (listFilter === "high-confidence" && (!insight || insight.confidence < 72)) return false;
+      if (listFilter === "value" && (!insight || insight.topEdge < VALUE_EDGE_THRESHOLD)) return false;
+      if (listFilter === "high-confidence" && (!insight || insight.confidence < CONFIDENCE_THRESHOLDS.bet))
+        return false;
       if (leagueFilter && !f.leagueName.toLowerCase().includes(leagueFilter.toLowerCase())) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -133,21 +136,13 @@ export function FixturesBoard({
   const finishedCount = fixtures.filter((f) => f.status === "final").length;
   const scheduledCount = fixtures.filter((f) => f.status === "pre-match").length;
   const watchlistCount = fixtures.filter((f) => starred.has(f.id)).length;
-  const valueCount = fixtures.filter((f) => (insightMap?.get(f.id)?.topEdge ?? 0) >= 3).length;
+  const valueCount = fixtures.filter(
+    (f) => (insightMap?.get(f.id)?.topEdge ?? 0) >= VALUE_EDGE_THRESHOLD
+  ).length;
   const oddsCount = fixtures.filter((f) => f.market.homeWinOdds > 0).length;
 
   function formatMatchTime(kickoff: string) {
-    try {
-      const d = new Date(kickoff);
-      return d.toLocaleTimeString("es-CO", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-        timeZone: "America/Bogota",
-      });
-    } catch {
-      return "--:--";
-    }
+    return formatKickoffTimeColombia(kickoff);
   }
 
   function openFixtureFromKeyboard(event: KeyboardEvent<HTMLDivElement>, fixture: Fixture) {
@@ -168,7 +163,7 @@ export function FixturesBoard({
         {isToday && statusFilter === "live" && liveCount === 0 && (
           <div className="fb-date-banner">
             Ahora mismo la API no reporta partidos en vivo en esta fecha. Si hay juegos en curso,
-            revisá la vista <strong>Partidos en Vivo</strong> (lista dedicada en tiempo real).
+            revisa la vista <strong>Partidos en Vivo</strong> (lista dedicada en tiempo real).
           </div>
         )}
         <button
@@ -224,7 +219,7 @@ export function FixturesBoard({
             className={listFilter === "watchlist" ? "fb-list-filter active" : "fb-list-filter"}
             onClick={() => setListFilter("watchlist")}
           >
-            <Star size={12} /> Watchlist <span>{watchlistCount}</span>
+            <Star size={12} /> Favoritos <span>{watchlistCount}</span>
           </button>
           <button
             type="button"
@@ -243,7 +238,7 @@ export function FixturesBoard({
               setStatusFilter("all");
               setListFilter("value");
             }}
-            title="Muestra partidos con edge ≥ 3% (en todas las pestañas de estado)"
+            title={`Muestra partidos con edge ≥ ${VALUE_EDGE_THRESHOLD}% (en todas las pestañas de estado)`}
           >
             Value <span>{valueCount}</span>
           </button>
@@ -254,9 +249,16 @@ export function FixturesBoard({
               setStatusFilter("all");
               setListFilter("high-confidence");
             }}
-            title="Muestra partidos con confianza ≥ 72 (en todas las pestañas de estado)"
+            title={`Muestra partidos con confianza ≥ ${CONFIDENCE_THRESHOLDS.bet}% (en todas las pestañas de estado)`}
           >
-            Conf. ≥ 72 <span>{fixtures.filter((f) => (insightMap?.get(f.id)?.confidence ?? 0) >= 72).length}</span>
+            Conf. ≥ {CONFIDENCE_THRESHOLDS.bet}{" "}
+            <span>
+              {
+                fixtures.filter(
+                  (f) => (insightMap?.get(f.id)?.confidence ?? 0) >= CONFIDENCE_THRESHOLDS.bet
+                ).length
+              }
+            </span>
           </button>
         </div>
 
@@ -300,16 +302,32 @@ export function FixturesBoard({
               <span>
                 {" "}
                 {insightsError
-                  ? " El escaneo AI falló — reintentá desde el banner superior."
+                  ? " El escaneo AI falló — reintenta desde el banner superior."
                   : insightsLoading
                     ? " El motor está escaneando partidos (máx. 8 por carga)."
-                    : " El motor aún no detectó edge ≥ 3% en esta fecha."}
+                    : ` El motor aún no detectó edge ≥ ${VALUE_EDGE_THRESHOLD}% en esta fecha.`}
               </span>
             )}
             {listFilter === "value" && valueCount > 0 && statusFilter !== "all" && (
-              <span> Probá la pestaña <strong>Todos</strong> — los picks con value pueden no ser solo programados.</span>
+              <span> Prueba la pestaña <strong>Todos</strong> — los picks con value pueden no ser solo programados.</span>
             )}
-            {listFilter !== "all" && listFilter !== "value" && " Probá ampliar los criterios de búsqueda."}
+            {listFilter !== "all" && listFilter !== "value" && " Prueba ampliar los criterios de búsqueda."}
+            {(statusFilter !== "all" || listFilter !== "all" || searchQuery.trim() || leagueFilter) && (
+              <div style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="qa-btn-deep"
+                  onClick={() => {
+                    setStatusFilter("all");
+                    setListFilter("all");
+                    setSearchQuery("");
+                    setLeagueFilter(null);
+                  }}
+                >
+                  Limpiar filtros
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -354,6 +372,20 @@ export function FixturesBoard({
                         <span className="fb-time-start">{formatMatchTime(fixture.kickoff)}</span>
                         <span className="fb-final-badge">FIN</span>
                       </div>
+                    ) : fixture.status === "postponed" ? (
+                      <div className="fb-live-time">
+                        <span className="fb-time-start">{formatMatchTime(fixture.kickoff)}</span>
+                        <span className="fb-postponed-badge" title={fixture.statusLong}>
+                          POSP
+                        </span>
+                      </div>
+                    ) : fixture.status === "cancelled" ? (
+                      <div className="fb-live-time">
+                        <span className="fb-time-start">{formatMatchTime(fixture.kickoff)}</span>
+                        <span className="fb-cancelled-badge" title={fixture.statusLong}>
+                          CANC
+                        </span>
+                      </div>
                     ) : (
                       <span className="fb-scheduled-time">{formatMatchTime(fixture.kickoff)}</span>
                     )}
@@ -385,22 +417,22 @@ export function FixturesBoard({
 
                   <div className="fb-match-badges">
                     {starred.has(fixture.id) && (
-                      <span className="fb-badge fb-badge-star" title="En watchlist">
-                        <Star size={10} /> WL
+                      <span className="fb-badge fb-badge-star" title="En favoritos">
+                        <Star size={10} /> FAV
                       </span>
                     )}
                     {fixture.market.homeWinOdds <= 0 && (
                       <span className="fb-badge fb-badge-warn" title="Sin cuotas">
-                        <AlertTriangle size={10} /> Sin odds
+                        <AlertTriangle size={10} /> Sin cuotas
                       </span>
                     )}
                     {fixture.coverage.tier === "low" && (
                       <span className="fb-badge fb-badge-muted">Baja cob.</span>
                     )}
-                    {insight && insight.confidence >= 72 && (
+                    {insight && insight.confidence >= CONFIDENCE_THRESHOLDS.bet && (
                       <span className="fb-badge fb-badge-conf">{Math.round(insight.confidence)}</span>
                     )}
-                    {insight && insight.topEdge >= 3 && (
+                    {insight && insight.topEdge >= VALUE_EDGE_THRESHOLD && (
                       <span className="fb-badge fb-badge-edge">+{insight.topEdge.toFixed(1)}%</span>
                     )}
                   </div>
@@ -437,6 +469,8 @@ export function FixturesBoard({
                   <button
                     type="button"
                     className="fb-star"
+                    title={starred.has(fixture.id) ? "Quitar de favoritos" : "Añadir a favoritos"}
+                    aria-label={starred.has(fixture.id) ? "Quitar de favoritos" : "Añadir a favoritos"}
                     onClick={(e) => {
                       e.stopPropagation();
                       onToggleStar(fixture);

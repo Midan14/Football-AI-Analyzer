@@ -1,12 +1,14 @@
-import { analyzeFixtureDeep } from "@/backend/lib/analysis/deep-analysis-engine";
-import { runFullAnalysis } from "@/backend/lib/analysis/analysis-orchestrator";
 import { computeFixtureEdgeHints } from "@/backend/lib/fixtures/fixture-edge-hints";
 import { pickFixtureScanCandidates } from "@/backend/lib/fixtures/pick-candidates";
+import { mergeOddsIntoFixtures } from "@/backend/lib/fixtures/merge-fixture-odds";
 import {
   enumerateIsoDates,
   filterFixturesByCountry,
 } from "@/backend/lib/fixtures/fixture-range";
-import { isApiFootballQuotaError } from "@/backend/lib/providers/api-football-errors";
+import {
+  isApiFootballQuotaError,
+  isApiFootballRateLimitError,
+} from "@/backend/lib/providers/api-football-errors";
 import { getActiveProviderName, getDataProvider } from "@/backend/lib/providers/provider-factory";
 import { demoCountries } from "@/backend/lib/providers/demo-data";
 import { buildInferredCoverageReport } from "@/backend/lib/leagues/league-confidence";
@@ -24,6 +26,14 @@ import {
   type AnalysisPreferences,
 } from "@/shared/analysis-preferences";
 import { syncFixtureCoverageFromMatchData } from "@/backend/lib/fixtures/sync-fixture-coverage";
+import {
+  ensureAccurateFixtureScore,
+  mergeFixtureResult,
+  normalizeFixtureScore,
+} from "@/backend/lib/fixtures/fixture-score-resolver";
+import { computeMetrics } from "@/backend/lib/analysis/performance-metrics";
+import { predictionMarketKey } from "@/shared/prediction-market-mapping";
+import type { RoiCalibrationContext } from "@/backend/lib/analysis/analysis-orchestrator";
 
 type MatchDetailProvider = {
   getMatchDetail: (fixtureId: string) => Promise<{
@@ -160,6 +170,9 @@ export async function listLiveFixtures() {
     if (providerName === "api-football" && isApiFootballQuotaError(error)) {
       return { fixtures: [], count: 0, provider: "api-football-quota" as const };
     }
+    if (providerName === "api-football" && isApiFootballRateLimitError(error)) {
+      return { fixtures: [], count: 0, provider: "api-football-rate-limit" as const };
+    }
     throw error;
   }
 }
@@ -194,7 +207,11 @@ export async function listLeagues(countryId?: string) {
   return { leagues };
 }
 
-export async function listFixtures(params: { leagueId?: string; date?: string }) {
+export async function listFixtures(params: {
+  leagueId?: string;
+  date?: string;
+  countryId?: string;
+}) {
   const provider = getActiveProviderName();
   try {
     const fixtures = await getDataProvider().getFixtures(params);
@@ -208,6 +225,12 @@ export async function listFixtures(params: { leagueId?: string; date?: string })
   } catch (error) {
     if (provider === "api-football" && isApiFootballQuotaError(error)) {
       return { fixtures: [], dataSource: "api-football-quota" as const };
+    }
+    if (provider === "api-football" && isApiFootballRateLimitError(error)) {
+      // Transient per-second/minute throttle. Caller should retry shortly;
+      // for now return an empty set with a distinct marker so the UI shows a
+      // soft "saturación temporal" hint instead of the hard quota banner.
+      return { fixtures: [], dataSource: "api-football-rate-limit" as const };
     }
     throw error;
   }
@@ -223,7 +246,11 @@ export async function listFixturesRange(params: {
   const dates = enumerateIsoDates(params.from, params.to);
   const rows = await Promise.all(
     dates.map(async (date) => {
-      const { fixtures } = await listFixtures({ leagueId: params.leagueId, date });
+      const { fixtures } = await listFixtures({
+        leagueId: params.leagueId,
+        date,
+        countryId: params.countryId,
+      });
       const filtered = filterFixturesByCountry(fixtures, params.countryId);
       return { date, fixtures: filtered };
     })
@@ -253,9 +280,18 @@ export async function getFixtureEdgeHintsForDate(params: {
   leagueId?: string;
   countryId?: string;
 }) {
-  const { fixtures } = await listFixtures({ leagueId: params.leagueId, date: params.date });
+  const { fixtures } = await listFixtures({
+    leagueId: params.leagueId,
+    date: params.date,
+    countryId: params.countryId,
+  });
   const filtered = filterFixturesByCountry(fixtures, params.countryId);
-  const candidates = pickFixtureScanCandidates(filtered, new Set(), 24);
+  const { odds } = await listOddsByDate({
+    date: params.date,
+    leagueId: params.leagueId,
+  });
+  const withOdds = mergeOddsIntoFixtures(filtered, odds);
+  const candidates = pickFixtureScanCandidates(withOdds, new Set(), 24);
   const hints = computeFixtureEdgeHints(candidates);
   return { date: params.date, hints, count: Object.keys(hints).length };
 }
@@ -308,19 +344,30 @@ export async function analyzeMatch(
         lineups: detail.lineups,
         refereeName: detail.refereeName ?? fixture.referee?.name,
       });
+      fixture = normalizeFixtureScore(fixture, events as MatchEvent[]);
+      fixture = await ensureAccurateFixtureScore(fixture, async () => events as MatchEvent[]);
     }
   } catch {
     // Non-fatal: Match Center will work without these
   }
 
+  const { runFullAnalysis, applyRoiCalibrationToAnalysis } = await import("@/backend/lib/analysis/analysis-orchestrator");
   const { analysis: fullAnalysis, mlPrediction, analysisPipeline } = await runFullAnalysis(fixture, {
     events: events as MatchEvent[] | undefined,
     preferences: prefs,
   });
+  const roiCalibration = _userId
+    ? await buildRoiCalibrationContext(_userId, fixture.leagueId, fullAnalysis.recommendation.market)
+    : undefined;
+  const calibratedAnalysis = applyRoiCalibrationToAnalysis(fullAnalysis, fixture, roiCalibration);
+
+  void import("@/backend/lib/odds/odds-snapshot-service").then(({ captureFixtureOddsSnapshots }) =>
+    captureFixtureOddsSnapshots(fixtureId).catch(() => {})
+  );
 
   return {
     fixture,
-    analysis: fullAnalysis,
+    analysis: calibratedAnalysis,
     lineups,
     events,
     statistics,
@@ -329,10 +376,77 @@ export async function analyzeMatch(
   };
 }
 
+async function buildRoiCalibrationContext(
+  userId: string,
+  leagueId: string | null | undefined,
+  recommendationMarket: string
+): Promise<RoiCalibrationContext | undefined> {
+  const marketKey = predictionMarketKey(recommendationMarket);
+  if (!marketKey) return undefined;
+
+  const rows = await prisma.prediction.findMany({
+    where: {
+      userId,
+      status: { in: ["WON", "LOST"] },
+    },
+    select: {
+      market: true,
+      prediction: true,
+      status: true,
+      probability: true,
+      roi: true,
+      stakeUnits: true,
+      leagueId: true,
+      clvPercent: true,
+    },
+    take: 5000,
+  });
+  if (rows.length === 0) return undefined;
+
+  const normalizedRows = rows.map((r) => ({
+    market: r.market,
+    prediction: r.prediction,
+    status: r.status as "WON" | "LOST",
+    probability: r.probability,
+    roi: r.roi,
+    stakeUnits: r.stakeUnits,
+    leagueId: r.leagueId,
+    clvPercent: r.clvPercent,
+    modelKey: "current-engine",
+  }));
+  const marketMetrics = computeMetrics(normalizedRows, "market").find((m) => m.key === marketKey) ?? null;
+  const leagueMetrics = leagueId
+    ? computeMetrics(normalizedRows, "league").find((m) => m.key === leagueId) ?? null
+    : null;
+  const globalMetrics = computeMetrics(
+    normalizedRows.map((row) => ({ ...row, modelKey: "global" })),
+    "model"
+  ).find((m) => m.key === "global") ?? null;
+
+  return { marketMetrics, leagueMetrics, globalMetrics };
+}
+
 export async function analyzeMatchDeep(fixtureId: string) {
   const fixture = await getDataProvider().getMatch(fixtureId);
-  const deepAnalysis = analyzeFixtureDeep(fixture);
-  return { fixture, deepAnalysis };
+  const { runFullAnalysis } = await import("@/backend/lib/analysis/analysis-orchestrator");
+  const { analyzeFixtureDeep } = await import("@/backend/lib/analysis/deep-analysis-engine");
+
+  const { analysis } = await runFullAnalysis(fixture);
+  const deepBase = analyzeFixtureDeep(fixture);
+
+  return {
+    fixture,
+    deepAnalysis: {
+      ...deepBase,
+      probabilities: analysis.probabilities,
+      valueTable: analysis.valueTable,
+      recommendation: analysis.recommendation,
+      confidence: analysis.confidence,
+      kelly: analysis.kelly,
+      ensemble: analysis.ensemble,
+      advancedModels: analysis.advancedModels,
+    },
+  };
 }
 
 /**

@@ -28,7 +28,7 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
   const { countryId: validatedCountryId } = validation.data;
 
   const cached = await cache.get(
-    cacheKeys.leagues(validatedCountryId || "all")
+    `${cacheKeys.leagues(validatedCountryId || "all")}:v2`
   );
   if (cached) {
     return successResponse(cached);
@@ -37,7 +37,7 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
   try {
     const data = await listLeagues(validatedCountryId);
     await cache.set(
-      cacheKeys.leagues(validatedCountryId || "all"),
+      `${cacheKeys.leagues(validatedCountryId || "all")}:v2`,
       data,
       43200
     );
@@ -47,7 +47,7 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
     if (allowDemoFallback()) {
       const demo = new DemoProvider();
       const data = { leagues: await demo.getLeagues(validatedCountryId) };
-      await cache.set(cacheKeys.leagues(validatedCountryId || "all"), data, 300);
+      await cache.set(`${cacheKeys.leagues(validatedCountryId || "all")}:v2`, data, 300);
       return successResponse(data);
     }
     return errorResponse(Errors.SERVICE_UNAVAILABLE);

@@ -154,7 +154,7 @@ export const cacheKeys = {
   ) =>
     `football:fixtures:range:v1:${leagueId}:${countryId}:${from}:${to}:${includeFixtures ? "fx" : "count"}`,
   fixtureEdgeHints: (leagueId: string, countryId: string, date: string) =>
-    `football:fixtures:edge-hints:v1:${leagueId}:${countryId}:${date}`,
+    `football:fixtures:edge-hints:v2:${leagueId}:${countryId}:${date}`,
   leagueCoverage: (leagueId: string, countryId: string) =>
     `football:leagues:coverage:v1:${leagueId}:${countryId}`,
   leagueStandings: (leagueId: string, countryId: string, limit: number) =>

@@ -34,52 +34,15 @@ import { timeSeriesForecastModel } from "./models/time-series-forecast";
 import { causalSurvivalModel } from "./models/causal-survival";
 import { quantumStakeOptimizer } from "./models/quantum-optimizer";
 import { buildExtendedStatisticalPack, sarimaExtension } from "./models/extended-statistical-pack";
+import { pickBestMarket, HEAVY_FAVORITE_MIN_EDGE, HEAVY_FAVORITE_MIN_ODDS, MIN_RECOMMENDATION_ODDS } from "./market-picker";
+import { buildTacticalRadar } from "./tactical-radar-builder";
+import { riskLevelFromConfidence } from "@/shared/confidence-thresholds";
 
 type ValueRow = AnalysisResult["valueTable"][number];
 
 type AnalyzeFixtureOptions = {
   events?: MatchEvent[];
 };
-
-function pickBestMarket(
-  valueTable: AnalysisResult["valueTable"],
-  probabilities: AnalysisResult["probabilities"]
-): ValueRow {
-  const attractiveMarkets = valueTable
-    .filter((row) => {
-      const impliedOdds = 100 / row.modelProbability;
-      return row.marketProbability > 0 && row.edge > 0 && impliedOdds >= 1.4 && impliedOdds <= 8.0;
-    })
-    .sort((a, b) => {
-      const scoreA = a.edge * Math.sqrt(a.modelProbability);
-      const scoreB = b.edge * Math.sqrt(b.modelProbability);
-      return scoreB - scoreA;
-    });
-
-  return attractiveMarkets[0]
-    ?? valueTable.filter((row) => row.marketProbability > 0 && row.edge > 0).sort((a, b) => b.edge - a.edge)[0]
-    ?? valueTable.sort((a, b) => b.edge - a.edge)[0]
-    ?? fallbackMarket(probabilities);
-}
-
-function fallbackMarket(probabilities: AnalysisResult["probabilities"]): ValueRow {
-  const options = [
-    ["Local gana", probabilities.homeWin],
-    ["Empate", probabilities.draw],
-    ["Visitante gana", probabilities.awayWin],
-    ["Over 2.5", probabilities.over25],
-    ["Under 3.5", probabilities.under35],
-    ["BTTS Sí", probabilities.btts],
-  ] as const;
-  const [market, modelProbability] = [...options].sort((a, b) => b[1] - a[1])[0];
-  return {
-    market: `${market}`,
-    modelProbability,
-    marketProbability: 0,
-    edge: 0,
-    verdict: "Solo modelo (sin cuotas de bookmaker)",
-  };
-}
 
 export function analyzeFixture(fixture: Fixture, options?: AnalyzeFixtureOptions): AnalysisResult {
   const xg = expectedGoals(fixture);
@@ -108,8 +71,8 @@ export function analyzeFixture(fixture: Fixture, options?: AnalyzeFixtureOptions
 
   const valueTable = buildValueTable(probabilities, fixture);
 
-  // Pick best market: balance edge, model probability, and odds attractiveness
-  const best = pickBestMarket(valueTable, probabilities);
+  const picked = pickBestMarket(valueTable, probabilities, fixture, confidenceScore);
+  const best = picked.row;
 
   const homeForm = formScore(fixture.home.form);
   const awayForm = formScore(fixture.away.form);
@@ -180,6 +143,7 @@ export function analyzeFixture(fixture: Fixture, options?: AnalyzeFixtureOptions
   let finalValueTable = valueTable;
   let finalBest = best;
   let finalKelly = kelly;
+  let finalPicked = picked;
 
   if (fixture.status === "live" && (fixture.elapsed ?? 0) > 0) {
     finalProbabilities = {
@@ -191,7 +155,9 @@ export function analyzeFixture(fixture: Fixture, options?: AnalyzeFixtureOptions
       btts: bayesian.posterior.btts,
     };
     finalValueTable = buildValueTable(finalProbabilities, fixture);
-    finalBest = pickBestMarket(finalValueTable, finalProbabilities);
+    const livePicked = pickBestMarket(finalValueTable, finalProbabilities, fixture, confidenceScore);
+    finalBest = livePicked.row;
+    finalPicked = livePicked;
     finalKelly = kellyPortfolio(
       finalValueTable.filter((r) => r.edge > 0),
       fixture,
@@ -218,9 +184,11 @@ export function analyzeFixture(fixture: Fixture, options?: AnalyzeFixtureOptions
   }
 
   // Build dynamic rationale
-  const bestFairOdds = round1(100 / Math.max(1, finalBest.modelProbability));
+  const bestFairOdds =
+    finalBest.modelProbability > 0 ? round1(100 / finalBest.modelProbability) : 0;
   const riskLevelText = confidenceScore >= 72 ? "bajo" : confidenceScore >= 58 ? "moderado" : "alto";
-  const hasActionableMarket = finalBest.marketProbability > 0 && finalBest.edge > 0 && finalKelly.bets.length > 0;
+  const hasActionableMarket = finalPicked.actionable;
+  const recommendedKelly = finalPicked.kellyBet;
   const edgeText = finalBest.marketProbability <= 0
     ? "sin cuota real para calcular edge"
     : finalBest.edge > 5 ? "edge significativo" : finalBest.edge > 2 ? "edge moderado" : "edge mínimo";
@@ -233,7 +201,24 @@ export function analyzeFixture(fixture: Fixture, options?: AnalyzeFixtureOptions
   const modelsUsed = `Ensemble: ${ensemble.dominantModel} dominante (acuerdo ${ensemble.modelAgreement}%).${
     fixture.status === "live" ? ` Hawkes: momentum ${hawkes.homeMomentum}/${hawkes.awayMomentum}.` : ""
   }`;
-  const rationale = finalBest.marketProbability <= 0
+  const { radar, radarHalfTime } = buildTacticalRadar({
+    fixture,
+    homeForm,
+    awayForm,
+    homeXg: extendedPack.xgModel.homeXg,
+    awayXg: extendedPack.xgModel.awayXg,
+    ensemble,
+    kalman,
+    xThreat,
+    hawkes,
+    valueBetReport,
+    halfTime: extendedPack.halfTime,
+    confidenceScore,
+  });
+  const rationale =
+    finalBest.market === "Sin valor claro"
+      ? `No hay mercado con valor accionable (cuota mín. ${MIN_RECOMMENDATION_ODDS}, Kelly > 0). Under 3.5 y líneas similares requieren edge ≥ ${HEAVY_FAVORITE_MIN_EDGE}% y cuota ≥ ${HEAVY_FAVORITE_MIN_ODDS}. Riesgo ${riskLevelText}. ${formContext}`
+      : finalBest.marketProbability <= 0
     ? `${finalBest.market}: modelo ${finalBest.modelProbability}%, pero no hay cuotas reales del bookmaker. Cuota justa ${bestFairOdds}. Riesgo ${riskLevelText}. ${formContext} ${modelsUsed}`
     : `${finalBest.market}: modelo ${finalBest.modelProbability}% vs mercado ${finalBest.marketProbability}% (${edgeText} +${finalBest.edge}%). ` +
       `Cuota justa ${bestFairOdds}. Riesgo ${riskLevelText}. ${formContext} ${modelsUsed}`;
@@ -245,21 +230,15 @@ export function analyzeFixture(fixture: Fixture, options?: AnalyzeFixtureOptions
     goalMarkets,
     confidence: { score: confidenceScore, penalties },
     riskFlags,
-    radar: [
-      { axis: "Forma", value: round1((homeForm + awayForm) / 2) },
-      { axis: "Ataque", value: round1(Math.min(100, (xg.home + xg.away) * 31)) },
-      { axis: "Defensa", value: round1(Math.max(25, 100 - (fixture.home.goalsAgainst + fixture.away.goalsAgainst) * 0.8)) },
-      { axis: "Motivación", value: round1((fixture.home.motivation + fixture.away.motivation) / 2) },
-      { axis: "Fatiga", value: round1(Math.max(20, 100 - Math.abs(fixture.home.restDays - fixture.away.restDays) * 9 - fixture.away.travelKm / 30)) },
-      { axis: "Mercado", value: fixture.coverage.hasOdds ? 72 : 35 },
-      { axis: "Cobertura", value: fixture.coverage.tier === "elite" ? 94 : fixture.coverage.tier === "standard" ? 74 : 45 },
-      { axis: "Outlier", value: fixture.context.lowDivision ? 34 : 62 },
-    ],
+    radar,
+    radarHalfTime,
     recommendation: {
       market: finalBest.market,
       fairOdds: bestFairOdds,
       minimumOdds: round1(bestFairOdds * 1.05),
-      stakeUnits: hasActionableMarket ? Math.min(finalKelly.bets[0].stakeUnits, stakeUnits) : 0,
+      stakeUnits: hasActionableMarket && recommendedKelly
+        ? Math.min(recommendedKelly.stakeUnits, stakeUnits)
+        : 0,
       rationale,
     },
     valueTable: finalValueTable,
@@ -466,25 +445,16 @@ export function blendAnalysisWithML(
   // Recompute value table with ML 1X2 probabilities
   const newValueTable = buildValueTable(newProbabilities, fixture);
 
-  // Rebuild recommendation
-  const attractiveMarkets = newValueTable
-    .filter((row) => {
-      const impliedOdds = 100 / row.modelProbability;
-      return row.marketProbability > 0 && row.edge > 0 && impliedOdds >= 1.4 && impliedOdds <= 8.0;
-    })
-    .sort((a, b) => {
-      const scoreA = a.edge * Math.sqrt(a.modelProbability);
-      const scoreB = b.edge * Math.sqrt(b.modelProbability);
-      return scoreB - scoreA;
-    });
-
-  const best = attractiveMarkets[0]
-    ?? newValueTable.filter((row) => row.marketProbability > 0 && row.edge > 0).sort((a, b) => b.edge - a.edge)[0]
-    ?? newValueTable.sort((a, b) => b.edge - a.edge)[0]
-    ?? fallbackMarket(newProbabilities);
-
-  const bestFairOdds = round1(100 / best.modelProbability);
-  const riskLevelText = base.confidence.score >= 68 ? "bajo" : base.confidence.score >= 52 ? "moderado" : "alto";
+  const picked = pickBestMarket(newValueTable, newProbabilities, fixture, base.confidence.score);
+  const best = picked.row;
+  const bestFairOdds = best.modelProbability > 0 ? round1(100 / best.modelProbability) : 0;
+  const mappedRiskLevel = riskLevelFromConfidence(base.confidence.score);
+  const riskLevelText =
+    mappedRiskLevel === "BAJO"
+      ? "bajo"
+      : mappedRiskLevel === "MODERADO"
+        ? "moderado"
+        : "alto";
   const edgeText = best.marketProbability <= 0
     ? "sin cuota real para calcular edge"
     : best.edge > 5 ? "edge significativo" : best.edge > 2 ? "edge moderado" : "edge mínimo";
@@ -507,7 +477,7 @@ export function blendAnalysisWithML(
     fixture,
     base.confidence.score
   );
-  const hasActionableMarket = best.marketProbability > 0 && best.edge > 0 && newKelly.bets.length > 0;
+  const hasActionableMarket = picked.actionable;
 
   // Update ensemble metadata
   const newEnsemble = base.ensemble ? {
@@ -527,7 +497,10 @@ export function blendAnalysisWithML(
       market: best.market,
       fairOdds: bestFairOdds,
       minimumOdds: round1(bestFairOdds * 1.05),
-      stakeUnits: hasActionableMarket ? Math.min(newKelly.bets[0].stakeUnits, base.recommendation.stakeUnits) : 0,
+      stakeUnits:
+        hasActionableMarket && picked.kellyBet
+          ? Math.min(picked.kellyBet.stakeUnits, base.recommendation.stakeUnits)
+          : 0,
       rationale: mlRationale,
     },
     ensemble: newEnsemble,

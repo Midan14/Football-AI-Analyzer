@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -12,7 +13,6 @@ import { ToastContainer } from "@/frontend/components/toast-container";
 import { GlobalDashboardView } from "./components/global-dashboard-view";
 import { QuickAnalysisCard } from "./components/quick-analysis-card";
 import { CalendarView } from "./components/calendar-view";
-import { DashboardSkeleton } from "./components/dashboard-skeleton";
 import { LeagueCountryView } from "./components/league-country-view";
 import { ModelAiView } from "./components/model-ai-view";
 import { AlertsView } from "./components/alerts-view";
@@ -25,10 +25,13 @@ import { PredictionHistoryView } from "./components/prediction-history-view";
 import { HelpView } from "./components/help-view";
 import { AnalysisHistoryView } from "./components/analysis-history-view";
 import { OpportunitiesView } from "./components/opportunities-view";
+import { OddsIntelligenceView } from "./components/odds-intelligence-view";
 import { navSections } from "./dashboard-config";
 import { OperationalStrip } from "./dashboard-components";
 import { DashboardTopbar } from "./components/dashboard-topbar";
 import { DataStatusBanner } from "./components/data-status-banner";
+import { FavoriteTeamAlertsBar } from "./components/favorite-team-alerts-bar";
+import { AppBootSplash } from "@/frontend/components/app-boot-splash";
 import { useDashboardController } from "./use-dashboard-controller";
 
 export function DashboardApp() {
@@ -44,14 +47,25 @@ export function DashboardApp() {
     matchCenterData, matchCenterLoading, matchCenterFetching, matchCenterUpdatedAt,
     loading, bootstrapLoading, bootstrapTimedOut, retryBootstrap, displayedConfidence, confidenceHint, actionableMarkets, riskLevel, qualityScore,
     fixtureStatus, isDashboardView, hasError, errorMessage, safeThemeClass,
-    safeDensity, pushActivity, openFixtureWithDate, setModelModePersisted, setBankrollPersisted,
+    safeDensity, pushActivity, openFixtureWithDate, goHome, setModelModePersisted, setBankrollPersisted,
     reanalyzeSelectedFixture, isReanalyzing,
   } = useDashboardController();
+
+  const [brandBusy, setBrandBusy] = useState(false);
+
+  const handleBrandHome = () => {
+    setBrandBusy(true);
+    goHome();
+    window.setTimeout(() => setBrandBusy(false), 700);
+  };
 
   if (bootstrapLoading) {
     return (
       <main className={`viewport density-${safeDensity} ${safeThemeClass}`}>
-        <DashboardSkeleton />
+        <AppBootSplash
+          message="Conectando Football AI…"
+          submessage="Cargando países, ligas y partidos del día"
+        />
       </main>
     );
   }
@@ -59,13 +73,20 @@ export function DashboardApp() {
   return (
     <main className={`viewport density-${safeDensity} ${safeThemeClass}`}>
       <ToastContainer toasts={toasts} onRemove={removeToast} />
+      <FavoriteTeamAlertsBar onAlert={addToast} />
       <a className="skip-link" href="#main-content">Saltar al contenido</a>
       <div className="dashboard-frame">
         <aside className="sidebar">
-          <div className="brand">
-            <div className="brand-shield">⚽</div>
+          <button
+            type="button"
+            className={`brand brand-home-btn ${brandBusy ? "busy" : ""} ${activeView === "Dashboard Global" ? "active" : ""}`}
+            onClick={handleBrandHome}
+            aria-label="Ir al Dashboard Global"
+            title="Ir al inicio — Dashboard Global"
+          >
+            <div className="brand-shield" aria-hidden="true">⚽</div>
             <strong>Football AI Analyzer</strong>
-          </div>
+          </button>
 
           <nav className="nav" aria-label="Navegación principal">
             {navSections.map((section) => (
@@ -353,10 +374,24 @@ export function DashboardApp() {
                 />
               );
             })() : (
-              <div className="empty-state large">Selecciona un partido para analizar.</div>
+              <div className="empty-state large">
+                Selecciona un partido para analizar.
+                <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center" }}>
+                  <button type="button" className="qa-btn-primary" onClick={() => setActiveView("Calendario")}>
+                    Abrir calendario
+                  </button>
+                  <button type="button" className="qa-btn-deep" onClick={() => setActiveView("Dashboard Global")}>
+                    Ir al dashboard
+                  </button>
+                </div>
+              </div>
             )
           ) : activeView === "Análisis Profundo" ? (
-            <DeepAnalysisView fixture={matchCenterData?.fixture ?? selectedFixture} />
+            <DeepAnalysisView
+              fixture={matchCenterData?.fixture ?? selectedFixture}
+              onOpenMatchCenter={() => setActiveView("Match Center")}
+              onOpenCalendar={() => setActiveView("Calendario")}
+            />
           ) : activeView === "Oportunidades" ? (
             <OpportunitiesView
               selectedDate={selectedDate}
@@ -364,6 +399,17 @@ export function DashboardApp() {
               fixturesDataSource={fixturesDataSource}
               onOpenFixture={(fixture) => openFixtureWithDate(fixture, `Oportunidad: ${fixture.home.name} vs ${fixture.away.name}`)}
               onGoWatchlist={() => setActiveView("Watchlist")}
+            />
+          ) : activeView === "Odds Intelligence" ? (
+            <OddsIntelligenceView
+              selectedDate={selectedDate}
+              selectedFixture={selectedFixture}
+              fixturesDataSource={fixturesDataSource}
+              onOpenMatchCenter={() => setActiveView("Match Center")}
+              onOpenFixture={(fixtureId) => {
+                setSelectedFixtureId(fixtureId);
+                setActiveView("Match Center");
+              }}
             />
           ) : activeView === "Historial de Análisis" ? (
             <AnalysisHistoryView
@@ -391,7 +437,7 @@ export function DashboardApp() {
               fixtures={fixtures}
               starred={starred}
               onToggleStar={(fixture) => toggleStar(fixture)}
-              onOpenFixture={(fixture) => openFixtureWithDate(fixture, `Watchlist: ${fixture.home.name} vs ${fixture.away.name}`)}
+              onOpenFixture={(fixture) => openFixtureWithDate(fixture, `Favoritos: ${fixture.home.name} vs ${fixture.away.name}`)}
             />
           ) : activeView === "Informes" ? (
             <ReportsView fixture={selectedFixture} analysis={analysis} modelMode={modelMode} scenario={scenario} riskLevel={riskLevel} onOpenMatch={() => setActiveView("Match Center")} />
@@ -400,11 +446,13 @@ export function DashboardApp() {
               provider={
                 fixturesDataSource === "api-football-quota"
                   ? "API-Football (cuota agotada)"
-                  : fixturesDataSource === "demo-fallback" || dataProvider === "demo-fallback"
-                    ? "Modo demostración"
-                    : dataProvider === "api-football" || fixturesDataSource === "api-football"
-                      ? "API-Football"
-                      : dataProvider
+                  : fixturesDataSource === "api-football-rate-limit"
+                    ? "API-Football (rate-limit temporal)"
+                    : fixturesDataSource === "demo-fallback" || dataProvider === "demo-fallback"
+                      ? "Modo demostración"
+                      : dataProvider === "api-football" || fixturesDataSource === "api-football"
+                        ? "API-Football"
+                        : dataProvider
               }
               onProviderClick={() =>
                 pushActivity(

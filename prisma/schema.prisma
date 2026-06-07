@@ -207,7 +207,12 @@ model Prediction {
   market          PredictionMarket
   prediction      String   // "HOME_WIN", "OVER_2.5", etc.
   probability     Float
-  odds            Float?
+  odds            Float?   // Cuota tomada (bookmaker) al crear la predicción
+  fairOdds        Float?   // Cuota justa del modelo
+  closingOdds     Float?   // Cuota de cierre (último snapshot pre-partido)
+  clvPercent      Float?   // Closing Line Value (%)
+  bookmaker       String?  // Bookmaker de la cuota tomada
+  
   stakeUnits      Float
   
   // Status
@@ -268,6 +273,23 @@ enum PredictionStatus {
   LOST
   VOID
   CANCELED
+}
+
+// Time-series odds for line movement & closing line
+model OddsSnapshot {
+  id           String   @id @default(cuid())
+  fixtureId    String
+  bookmaker    String
+  marketKey    String
+  selection    String
+  odds         Float
+  impliedProb  Float?
+  source       String   @default("provider")
+  capturedAt   DateTime @default(now())
+
+  @@index([fixtureId, capturedAt])
+  @@index([fixtureId, marketKey, capturedAt])
+  @@index([capturedAt])
 }
 
 // Alerts & Notifications
@@ -342,19 +364,6 @@ model RateLimit {
 
   @@unique([userId, endpoint, windowStart])
   @@index([windowEnd])
-}
-
-// System metrics
-model SystemMetric {
-  id          String   @id @default(cuid())
-  metric      String
-  value       Float
-  tags        Json
-  
-  createdAt   DateTime @default(now())
-
-  @@index([metric])
-  @@index([createdAt])
 }
 
 // ML Training dataset — historical matches with real outcomes for model training
@@ -461,4 +470,31 @@ model TrainingData {
   @@index([matchDate])
   @@index([actualResult])
   @@index([trainedAt])
+}
+
+// Dynamic Elo per team (hybrid ML pipeline)
+model TeamEloRating {
+  id        String   @id @default(cuid())
+  teamId    String
+  leagueId  String
+  season    String   @default("current")
+  elo       Float    @default(1500)
+  updatedAt DateTime @updatedAt
+
+  @@unique([teamId, leagueId, season])
+  @@index([teamId])
+  @@index([leagueId])
+}
+
+// System metrics
+model SystemMetric {
+  id          String   @id @default(cuid())
+  metric      String
+  value       Float
+  tags        Json
+  
+  createdAt   DateTime @default(now())
+
+  @@index([metric])
+  @@index([createdAt])
 }

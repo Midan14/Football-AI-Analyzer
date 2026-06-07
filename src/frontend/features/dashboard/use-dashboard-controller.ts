@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AnalysisResult, Fixture } from "@/shared/domain";
+import { fixtureStatusLabelEs } from "@/shared/fixture-status";
 import { useCountries } from "@/frontend/hooks/use-countries";
 import { useLeagues } from "@/frontend/hooks/use-leagues";
 import { useFixtures } from "@/frontend/hooks/use-fixtures";
@@ -23,7 +24,7 @@ import {
   todayIsoDateColombia,
 } from "@/frontend/lib/date-utils";
 import { parseCalendarUrlState, syncDashboardUrl } from "@/frontend/lib/calendar-export";
-import { confidenceFromAnalysis } from "@/frontend/lib/confidence-display";
+import { confidenceFromAnalysis, riskFromConfidence } from "@/frontend/lib/confidence-display";
 import { normalizeAnalysisPreferences } from "@/shared/analysis-preferences";
 import { openFixtureInContext, type OpenFixtureContext } from "@/frontend/lib/open-fixture";
 import { useUserPreferences } from "@/frontend/hooks/use-user-preferences";
@@ -133,6 +134,12 @@ export function useDashboardController() {
       );
       return;
     }
+    if (fixturesDataSource === "api-football-rate-limit") {
+      setStatusMessage(
+        "Saturación temporal de API-Football — reintentando automáticamente. Los datos vuelven en unos segundos."
+      );
+      return;
+    }
     const usingDemo =
       fixturesDataSource === "demo-fallback" || dataProvider === "demo-fallback";
     if (usingDemo) {
@@ -170,26 +177,9 @@ export function useDashboardController() {
     enabled: isTodaySelected && !apiQuotaExhausted && needsLiveMergeInFixtures,
   });
   const liveSnapshot = livePayload?.fixtures ?? [];
-  const fixtureIdsForOdds = useMemo(
-    () =>
-      fixturesRaw
-        .filter((fixture) => fixture.status === "pre-match" || fixture.status === "live")
-        .map((fixture) => fixture.id)
-        .filter((id) => /^\d+$/.test(id))
-        .slice(0, 80),
-    [fixturesRaw]
-  );
-
-  const oddsQueryEnabled =
-    Boolean(selectedDate) &&
-    (Boolean(scopedLeagueId) || fixtureIdsForOdds.length > 0);
 
   const { data: oddsByDate = {}, isLoading: oddsLoading } = useOddsByDate(selectedDate, scopedLeagueId, {
-    enabled: oddsQueryEnabled,
-    fixtureIds:
-      isBroadFixturesView && !scopedLeagueId && fixtureIdsForOdds.length > 0
-        ? fixtureIdsForOdds
-        : undefined,
+    enabled: Boolean(selectedDate),
   });
   const fixtures = useMemo(() => {
     const merged = mergeOddsIntoFixtures(fixturesRaw, oddsByDate);
@@ -312,9 +302,11 @@ export function useDashboardController() {
   const confidenceHint = confidenceDisplay.hint;
   const positiveEdges = analysis?.valueTable.filter((row) => row.edge > 0).length ?? 0;
   const actionableMarkets = analysis?.valueTable.filter((row) => row.edge >= 4).length ?? 0;
-  const riskLevel = displayedConfidence >= 68 ? "BAJO" : displayedConfidence >= 52 ? "MODERADO" : "ALTO";
+  const riskLevel = riskFromConfidence(displayedConfidence);
   const qualityScore = Math.max(0, Math.min(100, displayedConfidence + positiveEdges * 3 - (analysis?.riskFlags.length ?? 0) * 4));
-  const fixtureStatus = selectedFixture?.status === "live" ? "En vivo" : selectedFixture?.status === "final" ? "Finalizado" : "Pre-match";
+  const fixtureStatus = selectedFixture
+    ? fixtureStatusLabelEs(selectedFixture.status, selectedFixture.statusLong)
+    : "Pre-match";
   const hasError = Boolean(countriesError && countries.length === 0) ||
     Boolean(leaguesError && leagues.length === 0 && selectedCountry) ||
     Boolean(fixturesError && fixturesRaw.length === 0) ||
@@ -349,6 +341,16 @@ export function useDashboardController() {
 
   const openFixtureWithDate = (fixture: Fixture, status?: string) => {
     openFixtureInContext(fixtureContext, fixture, { statusMessage: status, syncDate: true });
+  };
+
+  const goHome = () => {
+    setActiveView("Dashboard Global");
+    setSelectedFixtureId("");
+    setSelectedCountry("");
+    setSelectedLeague("");
+    setSelectedDate(todayIsoDateColombia());
+    setStatusMessage("Dashboard Global");
+    void refetchFixtures();
   };
 
   const setModelModePersisted = (mode: ModelMode) => {
@@ -483,6 +485,7 @@ export function useDashboardController() {
     pushActivity,
     openFixture,
     openFixtureWithDate,
+    goHome,
     setModelModePersisted,
     setBankrollPersisted,
     reanalyzeSelectedFixture,

@@ -440,6 +440,15 @@ def main():
     print(f"  Models saved to: {MODELS_DIR}")
     print("═══════════════════════════════════════════════════")
 
+    # Hybrid pipeline (Dixon-Coles → XGBoost)
+    print("\n🔗 Training hybrid Dixon-Coles → XGBoost pipeline...")
+    try:
+        from train_hybrid import train as train_hybrid
+
+        train_hybrid()
+    except Exception as e:
+        print(f"   ⚠️ Hybrid training skipped: {e}")
+
 
 if __name__ == "__main__":
     main()

@@ -102,4 +102,25 @@ export class DemoProvider {
       statistics: demoLiveStatistics[fixtureId] ?? [],
     };
   }
+
+  async getBookmakersOddsForFixture(fixtureId: string): Promise<Record<string, import("@/shared/domain").FixtureMarket>> {
+    const fixture = await this.getMatch(fixtureId);
+    const base = fixture.market;
+    const tweak = (value: number, delta: number) =>
+      Math.max(1.05, Math.round((value + delta) * 100) / 100);
+
+    return {
+      Bet365: base,
+      "1xBet": {
+        ...base,
+        homeWinOdds: tweak(base.homeWinOdds, 0.05),
+        drawOdds: tweak(base.drawOdds, -0.04),
+        awayWinOdds: tweak(base.awayWinOdds, 0.08),
+        over25Odds: tweak(base.over25Odds, 0.05),
+        under35Odds: tweak(base.under35Odds, -0.03),
+        bttsYesOdds: tweak(base.bttsYesOdds, 0.04),
+        bttsNoOdds: tweak(base.bttsNoOdds, -0.03),
+      },
+    };
+  }
 }

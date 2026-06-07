@@ -1,62 +1,11 @@
 import type { AnalysisResult, Fixture } from "@/shared/domain";
+import { getBookmakerOdds } from "@/backend/lib/analysis/shared-math";
 import type { PredictionRecord } from "./prediction-history";
 import { getPredictionHistory, updatePredictionResult } from "./prediction-history";
+import { mapRecommendationMarket, type PredictionMarketKey } from "@/shared/prediction-market-mapping";
 
 
-export type PredictionMarket =
-  | "WIN_1X2"
-  | "DOUBLE_CHANCE"
-  | "OVER_UNDER"
-  | "BTTS"
-  | "ASIAN_HANDICAP"
-  | "EXACT_SCORE"
-  | "GOALS_ODD_EVEN"
-  | "EUROPEAN_HANDICAP"
-  | "WIN_TO_NIL"
-  | "CLEAN_SHEET"
-  | "TEAM_TO_SCORE"
-  | "HT_RESULT"
-  | "HT_FT"
-  | "HT_OVER_UNDER"
-  | "HT_BTTS"
-  | "GOAL_BOTH_HALVES"
-  | "CORNERS_OVER_UNDER"
-  | "CORNERS_HANDICAP"
-  | "CARDS_OVER_UNDER"
-  | "RED_CARD_MATCH"
-  | "PENALTY_MATCH"
-  | "FIRST_GOAL_SCORER"
-  | "ANYTIME_SCORER"
-  | "HAT_TRICK"
-  | "PLAYER_BOOKED";
-
-function mapMarketName(market: string): { market: PredictionMarket; prediction: string } | null {
-  // Strip fallback prefix if present
-  const clean = market.startsWith("Sin cuota real disponible (")
-    ? market.replace("Sin cuota real disponible (", "").replace(")", "")
-    : market;
-
-  const map: Record<string, { market: PredictionMarket; prediction: string }> = {
-    "Local gana": { market: "WIN_1X2", prediction: "HOME_WIN" },
-    Empate: { market: "WIN_1X2", prediction: "DRAW" },
-    "Visitante gana": { market: "WIN_1X2", prediction: "AWAY_WIN" },
-    "Doble Chance 1X": { market: "DOUBLE_CHANCE", prediction: "1X" },
-    "Doble Chance X2": { market: "DOUBLE_CHANCE", prediction: "X2" },
-    "Doble Chance 12": { market: "DOUBLE_CHANCE", prediction: "12" },
-    "Over 1.5": { market: "OVER_UNDER", prediction: "OVER_1.5" },
-    "Over 2.5": { market: "OVER_UNDER", prediction: "OVER_2.5" },
-    "Over 3.5": { market: "OVER_UNDER", prediction: "OVER_3.5" },
-    "Under 1.5": { market: "OVER_UNDER", prediction: "UNDER_1.5" },
-    "Under 2.5": { market: "OVER_UNDER", prediction: "UNDER_2.5" },
-    "Under 3.5": { market: "OVER_UNDER", prediction: "UNDER_3.5" },
-    "BTTS Sí": { market: "BTTS", prediction: "YES" },
-    "BTTS No": { market: "BTTS", prediction: "NO" },
-    "AH Local -1": { market: "ASIAN_HANDICAP", prediction: "HOME_-1" },
-    "AH Visitante +1": { market: "ASIAN_HANDICAP", prediction: "AWAY_+1" },
-  };
-
-  return map[clean] ?? null;
-}
+export type PredictionMarket = PredictionMarketKey;
 
 function getProbabilityForMarket(market: string, analysis: AnalysisResult): number {
   const row = analysis.valueTable.find((r) => r.market === market);
@@ -78,13 +27,14 @@ export async function createPredictionFromAnalysis(
   analysis: AnalysisResult,
   riskLevel: string
 ): Promise<void> {
-  const mapped = mapMarketName(analysis.recommendation.market);
+  const mapped = mapRecommendationMarket(analysis.recommendation.market);
   if (!mapped) {
     console.warn("No prediction mapping for market:", analysis.recommendation.market);
     return;
   }
 
   const probability = getProbabilityForMarket(analysis.recommendation.market, analysis);
+  const takenOdds = getBookmakerOdds(fixture, analysis.recommendation.market);
 
   const payload = {
     fixtureId: fixture.id,
@@ -92,9 +42,11 @@ export async function createPredictionFromAnalysis(
     market: mapped.market,
     prediction: mapped.prediction,
     probability,
-    odds: analysis.recommendation.fairOdds || null,
+    odds: takenOdds > 1.01 ? takenOdds : null,
+    fairOdds: analysis.recommendation.fairOdds || null,
+    bookmaker: takenOdds > 1.01 ? fixture.market.bookmakerName ?? "Proveedor sin nombre" : null,
     stakeUnits: analysis.recommendation.stakeUnits,
-    notes: `Auto-guardado desde análisis. Riesgo: ${riskLevel}. Rationale: ${analysis.recommendation.rationale ?? ""}`,
+    notes: `Auto-guardado desde análisis. Modelo: ${analysis.ensemble?.dominantModel ?? analysis.advancedModels?.autoMl.championModel ?? "current-engine"}. Riesgo: ${riskLevel}. Rationale: ${analysis.recommendation.rationale ?? ""}`,
   };
 
   const res = await fetch("/api/predictions", {
@@ -122,6 +74,10 @@ type BackendPrediction = {
   prediction: string;
   probability: number;
   odds: number | null;
+  fairOdds?: number | null;
+  closingOdds?: number | null;
+  clvPercent?: number | null;
+  bookmaker?: string | null;
   stakeUnits: number;
   status: "OPEN" | "WON" | "LOST" | "VOID" | "CANCELED";
   roi: number | null;
@@ -230,7 +186,11 @@ export async function fetchPredictionRecordsForDisplay(): Promise<PredictionReco
       kickoff: meta?.kickoff ?? pred.createdAt,
       predictedMarket: marketLabel,
       predictedProbability: pred.probability,
-      fairOdds: pred.odds ?? 0,
+      fairOdds: pred.fairOdds ?? pred.odds ?? 0,
+      takenOdds: pred.odds ?? undefined,
+      closingOdds: pred.closingOdds ?? undefined,
+      clvPercent: pred.clvPercent ?? undefined,
+      bookmaker: pred.bookmaker ?? undefined,
       confidence,
       riskLevel: parseRiskFromNotes(pred.notes),
       stakeUnits: pred.stakeUnits,

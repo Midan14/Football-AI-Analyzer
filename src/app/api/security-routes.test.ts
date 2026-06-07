@@ -181,4 +181,111 @@ describe("API security hardening", () => {
     expect(text).toContain("\"type\":\"connected\"");
     expect(text).not.toContain("mock-");
   });
+
+  it("rejects real-money prediction stake without real bookmaker edge", async () => {
+    const createPrediction = vi.fn();
+    vi.doMock("@/auth", () => ({
+      auth: vi.fn(async () => ({ user: { id: "user-1", role: "USER" } })),
+    }));
+    vi.doMock("@/lib/db", () => ({
+      prisma: {
+        prediction: { create: createPrediction },
+      },
+    }));
+    vi.doMock("@/lib/cache", () => ({
+      cache: { delete: vi.fn(), get: vi.fn(), set: vi.fn() },
+      cacheKeys: { userPredictions: (userId: string) => `predictions:${userId}` },
+    }));
+    vi.doMock("@/lib/rate-limit", () => ({
+      checkRateLimit: vi.fn(async () => allowedRateLimit),
+    }));
+
+    const { POST } = await import("@/app/api/predictions/route");
+    const response = await POST(
+      new NextRequest("http://localhost/api/predictions", {
+        method: "POST",
+        body: JSON.stringify({
+          fixtureId: "fixture-1",
+          market: "WIN_1X2",
+          prediction: "HOME_WIN",
+          probability: 58,
+          stakeUnits: 0.5,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(createPrediction).not.toHaveBeenCalled();
+  });
+
+  it("blocks dashboard summary for guests before provider work", async () => {
+    const listFixtures = vi.fn();
+    const listOddsByDate = vi.fn();
+    vi.doMock("@/auth", () => ({
+      auth: vi.fn(async () => null),
+    }));
+    vi.doMock("@/backend/server/football/football-service", () => ({
+      listFixtures,
+      listOddsByDate,
+    }));
+    vi.doMock("@/lib/cache", () => ({
+      cache: { get: vi.fn(), set: vi.fn() },
+    }));
+    vi.doMock("@/lib/db", () => ({
+      prisma: { watchlistItem: { findMany: vi.fn() } },
+    }));
+    vi.doMock("@/lib/rate-limit", () => ({
+      checkRateLimit: vi.fn(async () => allowedRateLimit),
+    }));
+    vi.doMock("@/backend/server/football/fixture-insights-scan", () => ({
+      scanFixtureInsights: vi.fn(),
+      topFixtureInsights: vi.fn(),
+    }));
+
+    const { GET } = await import("@/app/api/dashboard/summary/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/dashboard/summary?date=2026-05-20")
+    );
+
+    expect(response.status).toBe(401);
+    expect(listFixtures).not.toHaveBeenCalled();
+    expect(listOddsByDate).not.toHaveBeenCalled();
+  });
+
+  it("labels arbitrage as simulation and exposes no real opportunities", async () => {
+    vi.doMock("@/auth", () => ({
+      auth: vi.fn(async () => ({ user: { id: "user-1", role: "USER" } })),
+    }));
+    vi.doMock("@/backend/server/football/football-service", () => ({
+      analyzeMatch: vi.fn(async () => ({
+        fixture: {
+          home: { name: "Home" },
+          away: { name: "Away" },
+          leagueName: "League",
+          kickoff: "2026-05-20T20:00:00.000Z",
+          market: {
+            homeWinOdds: 2.1,
+            drawOdds: 3.4,
+            awayWinOdds: 3.8,
+            over25Odds: 2.0,
+            under25Odds: 2.05,
+          },
+        },
+        analysis: {},
+      })),
+    }));
+
+    const { GET } = await import("@/app/api/arbitrage/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/arbitrage?fixtureId=fixture-1")
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data.simulationMode).toBe(true);
+    expect(body.data.isArbitrageAvailable).toBe(false);
+    expect(body.data.arbitrageCount).toBe(0);
+    expect(body.data.opportunities).toEqual([]);
+    expect(Array.isArray(body.data.simulatedOpportunities)).toBe(true);
+  });
 });

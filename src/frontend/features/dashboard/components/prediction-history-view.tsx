@@ -29,6 +29,14 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
     withResult: history.filter((p) => p.result).length,
     won: history.filter((p) => p.result?.predictionWon).length,
     lost: history.filter((p) => !p.result?.predictionWon && p.result).length,
+    withClv: history.filter((p) => p.clvPercent !== undefined).length,
+    avgClv:
+      history.filter((p) => p.clvPercent !== undefined).length > 0
+        ? history
+            .filter((p) => p.clvPercent !== undefined)
+            .reduce((sum, p) => sum + (p.clvPercent ?? 0), 0) /
+          history.filter((p) => p.clvPercent !== undefined).length
+        : 0,
     winRate:
       history.filter((p) => p.result).length > 0
         ? (history.filter((p) => p.result?.predictionWon).length /
@@ -41,7 +49,12 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
         ? history.reduce((sum, p) => sum + (p.result?.profit ?? 0), 0) /
           history.filter((p) => p.result).length
         : 0,
+    totalStakeResolved: history
+      .filter((p) => p.result)
+      .reduce((sum, p) => sum + p.stakeUnits, 0),
   };
+  const roiPercent =
+    stats.totalStakeResolved > 0 ? (stats.totalProfit / stats.totalStakeResolved) * 100 : 0;
 
   const {
     filtered,
@@ -96,6 +109,12 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
   };
 
   const hasOpenPredictions = history.some((p) => !p.result);
+  const hasActiveFilters =
+    leagueFilter !== "" ||
+    resultFilter !== "all" ||
+    dateFrom !== "" ||
+    dateTo !== "" ||
+    minConfidence > 0;
 
   if (isLoading) {
     return (
@@ -209,7 +228,23 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
               <div className="stat-card"><span>Perdidas</span><strong>{stats.lost}</strong></div>
               <div className="stat-card"><span>Win Rate</span><strong>{stats.winRate.toFixed(1)}%</strong></div>
               <div className="stat-card"><span>Profit Total</span><strong className={stats.totalProfit >= 0 ? "positive" : "negative"}>{stats.totalProfit >= 0 ? "+" : ""}{stats.totalProfit.toFixed(2)}u</strong></div>
+              <div className="stat-card">
+                <span>ROI real</span>
+                <strong className={roiPercent >= 0 ? "positive" : "negative"}>
+                  {roiPercent >= 0 ? "+" : ""}
+                  {roiPercent.toFixed(1)}%
+                </strong>
+              </div>
               <div className="stat-card"><span>Profit Medio</span><strong>{stats.avgProfit.toFixed(2)}u</strong></div>
+              {stats.withClv > 0 && (
+                <div className="stat-card">
+                  <span>CLV medio</span>
+                  <strong className={stats.avgClv >= 0 ? "positive" : "negative"}>
+                    {stats.avgClv >= 0 ? "+" : ""}
+                    {stats.avgClv.toFixed(1)}%
+                  </strong>
+                </div>
+              )}
             </div>
           </article>
         </section>
@@ -234,6 +269,14 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
               <div className="prediction-stake">
                 <span>{item.stakeUnits}u stake</span>
                 <b>{item.riskLevel} riesgo</b>
+                {item.takenOdds ? (
+                  <small>
+                    Cuota {item.takenOdds.toFixed(2)}
+                    {item.clvPercent !== undefined
+                      ? ` · CLV ${item.clvPercent >= 0 ? "+" : ""}${item.clvPercent.toFixed(1)}%`
+                      : ""}
+                  </small>
+                ) : null}
               </div>
               {item.result && (
                 <div className={`prediction-result ${item.result.predictionWon ? "won" : "lost"}`}>
@@ -243,7 +286,26 @@ export function PredictionHistoryView({ addToast }: { addToast: (message: string
               )}
             </div>
           ))}
-          {!filtered.length && <div className="empty-state">No hay predicciones que coincidan con los filtros.</div>}
+          {!filtered.length && (
+            <div className="empty-state">
+              <p>No hay predicciones que coincidan con los filtros.</p>
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  className="qa-btn-deep"
+                  onClick={() => {
+                    setLeagueFilter("");
+                    setResultFilter("all");
+                    setDateFrom("");
+                    setDateTo("");
+                    setMinConfidence(0);
+                  }}
+                >
+                  Limpiar filtros
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </article>
     </section>

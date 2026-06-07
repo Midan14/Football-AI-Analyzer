@@ -26,6 +26,15 @@ import {
   sortValueTable,
   type ModelInventoryState,
 } from "@/frontend/lib/model-ai-utils";
+import { CONFIDENCE_THRESHOLDS } from "@/shared/confidence-thresholds";
+
+function round1(n: number) {
+  return Math.round(n * 10) / 10;
+}
+
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
 
 export function EnsembleTab({
   analysis,
@@ -303,9 +312,10 @@ export function AllModelsTab({
             <div key={r.axis} className="mai-radar-item">
               <span>{r.axis}</span>
               <div className="mai-radar-bar">
-                <div style={{ width: `${r.value}%` }} />
+                <div className="home" style={{ width: `${r.home}%` }} />
+                <div className="away" style={{ width: `${r.away}%` }} />
               </div>
-              <b>{r.value}</b>
+              <b>{r.home}/{r.away}</b>
             </div>
           ))}
         </div>
@@ -388,6 +398,247 @@ export function AdvancedTab({ analysis, fixture }: { analysis: AnalysisResult; f
             <div><span>Riesgo alto</span><b>{advanced.cardsRisk.highCardRisk ? "Sí" : "No"}</b></div>
           </div>
         </div>
+        {advanced.multiMarket && (
+          <>
+            <div className="mai-adv-card">
+              <h4>Capa multi-mercado <EngineBadge engine={sources?.multiMarket} /></h4>
+              <div className="mai-features">
+                <div><span>Calibración</span><b>{advanced.multiMarket.calibration.marketCalibrationScore}%</b></div>
+                <div><span>Filtro edge</span><b>{advanced.multiMarket.calibration.valueFilterScore}%</b></div>
+                <div><span>Umbral edge</span><b>{advanced.multiMarket.calibration.edgeThreshold}%</b></div>
+              </div>
+            </div>
+            <div className="mai-adv-card">
+              <h4>Córners avanzado</h4>
+              <div className="mai-features">
+                <div><span>Motor</span><b>{advanced.multiMarket.corners.engine}</b></div>
+                <div><span>Over 8.5 / 9.5</span><b>{advanced.multiMarket.corners.over85Corners}% / {advanced.multiMarket.corners.over95Corners}%</b></div>
+                <div><span>PPDA proxy</span><b>{advanced.multiMarket.corners.ppdaProxy}</b></div>
+              </div>
+            </div>
+            <div className="mai-adv-card">
+              <h4>Tarjetas avanzado</h4>
+              <div className="mai-features">
+                <div><span>Motor</span><b>{advanced.multiMarket.cards.engine}</b></div>
+                <div><span>Over 4.5</span><b>{advanced.multiMarket.cards.over45Cards}%</b></div>
+                <div><span>Hawkes tensión</span><b>{advanced.multiMarket.cards.hawkesIntensity}%</b></div>
+              </div>
+            </div>
+            <div className="mai-adv-card">
+              <h4>Live / Props / Riesgo</h4>
+              <div className="mai-features">
+                <div><span>Game state</span><b>{advanced.multiMarket.live.gameStateIndex}%</b></div>
+                <div><span>Props</span><b>{advanced.multiMarket.playerProps.status}</b></div>
+                <div><span>Portfolio</span><b>{advanced.multiMarket.risk.portfolioMethod}</b></div>
+              </div>
+            </div>
+
+            {/* --- Expected Threat & Field Tilt Visual Card --- */}
+            <div className="mai-adv-card" style={{ gridColumn: "span 2", background: "linear-gradient(135deg, rgba(30, 41, 59, 0.45) 0%, rgba(15, 23, 42, 0.65) 100%)", borderColor: "rgba(99, 102, 241, 0.3)" }}>
+              <h4 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Territorio y Amenaza (xT & Field Tilt)</span>
+                <span className="mai-engine-badge python" style={{ background: "rgba(99, 102, 241, 0.15)", color: "#818cf8", border: "1px solid rgba(99, 102, 241, 0.35)" }}>Élite AI</span>
+              </h4>
+              <p className="mai-adv-note">Evaluación de dominio territorial y amenaza añadida en último tercio</p>
+              
+              <div style={{ padding: "8px 0" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--muted)", marginBottom: "5px" }}>
+                  <span>Field Tilt Local: <b>{advanced.multiMarket.expectedThreat?.fieldTilt ?? 50}%</b></span>
+                  <span>Field Tilt Visita: <b>{round1(100 - (advanced.multiMarket.expectedThreat?.fieldTilt ?? 50))}%</b></span>
+                </div>
+                <div style={{ height: "10px", background: "rgba(255,255,255,0.06)", borderRadius: "5px", overflow: "hidden", display: "flex" }}>
+                  <div style={{ width: `${advanced.multiMarket.expectedThreat?.fieldTilt ?? 50}%`, background: "linear-gradient(90deg, #3b82f6, #6366f1)", height: "100%" }} />
+                  <div style={{ width: `${100 - (advanced.multiMarket.expectedThreat?.fieldTilt ?? 50)}%`, background: "linear-gradient(90deg, #f43f5e, #ec4899)", height: "100%" }} />
+                </div>
+              </div>
+
+              <div className="mai-features" style={{ marginTop: "12px" }}>
+                <div>
+                  <span>xThreat Local</span>
+                  <b>{advanced.multiMarket.expectedThreat?.homeXThreat.toFixed(2) ?? "0.00"} xT</b>
+                </div>
+                <div>
+                  <span>xThreat Visita</span>
+                  <b>{advanced.multiMarket.expectedThreat?.awayXThreat.toFixed(2) ?? "0.00"} xT</b>
+                </div>
+                <div>
+                  <span>Dominancia</span>
+                  <span style={{ 
+                    background: (advanced.multiMarket.expectedThreat?.dominanceRatio ?? 1) >= 1.25 ? "rgba(52, 211, 153, 0.15)" : "rgba(244, 63, 94, 0.15)",
+                    color: (advanced.multiMarket.expectedThreat?.dominanceRatio ?? 1) >= 1.25 ? "#34d399" : "#f43f5e",
+                    padding: "2px 6px",
+                    borderRadius: "4px",
+                    fontWeight: "bold",
+                    fontSize: "11px"
+                  }}>
+                    {advanced.multiMarket.expectedThreat?.dominanceRatio.toFixed(2) ?? "1.00"}x
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* --- Conformal Prediction 95% Confidence Intervals Visual Card --- */}
+            <div className="mai-adv-card" style={{ background: "linear-gradient(135deg, rgba(30, 41, 59, 0.45) 0%, rgba(15, 23, 42, 0.65) 100%)", borderColor: "rgba(16, 185, 129, 0.3)" }}>
+              <h4 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Intervalos Conformales 95%</span>
+                <span className="mai-engine-badge ts" style={{ background: "rgba(16, 185, 129, 0.15)", color: "#34d399", border: "1px solid rgba(16, 185, 129, 0.35)" }}>Calibrado</span>
+              </h4>
+              <p className="mai-adv-note">Intervalos de predicción calibrados matemáticamente libres de sesgo</p>
+              
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px" }}>
+                  <span style={{ color: "var(--muted)" }}>Local Gana:</span>
+                  <b style={{ color: "var(--text)" }}>[{advanced.multiMarket.conformalRange?.homeWinRange[0]}% - {advanced.multiMarket.conformalRange?.homeWinRange[1]}%]</b>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px" }}>
+                  <span style={{ color: "var(--muted)" }}>Empate:</span>
+                  <b style={{ color: "var(--text)" }}>[{advanced.multiMarket.conformalRange?.drawRange[0]}% - {advanced.multiMarket.conformalRange?.drawRange[1]}%]</b>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px" }}>
+                  <span style={{ color: "var(--muted)" }}>Visita Gana:</span>
+                  <b style={{ color: "var(--text)" }}>[{advanced.multiMarket.conformalRange?.awayWinRange[0]}% - {advanced.multiMarket.conformalRange?.awayWinRange[1]}%]</b>
+                </div>
+              </div>
+
+              <div style={{ marginTop: "12px", textAlign: "center" }}>
+                {advanced.multiMarket.conformalRange?.confidenceGuaranteed ? (
+                  <span style={{ 
+                    display: "inline-block", 
+                    width: "100%", 
+                    padding: "4px 8px", 
+                    borderRadius: "6px", 
+                    background: "rgba(52, 211, 153, 0.12)", 
+                    color: "#34d399", 
+                    fontSize: "10px", 
+                    fontWeight: "bold",
+                    textTransform: "uppercase"
+                  }}>
+                    🛡️ Garantía de Confianza Activa
+                  </span>
+                ) : (
+                  <span style={{ 
+                    display: "inline-block", 
+                    width: "100%", 
+                    padding: "4px 8px", 
+                    borderRadius: "6px", 
+                    background: "rgba(245, 158, 11, 0.12)", 
+                    color: "#f59e0b", 
+                    fontSize: "10px", 
+                    fontWeight: "bold",
+                    textTransform: "uppercase"
+                  }}>
+                    ⚠️ Especulativa (Varianza Alta)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* --- Markov Chain MCMC Simulator Visual Card --- */}
+            <div className="mai-adv-card" style={{ background: "linear-gradient(135deg, rgba(30, 41, 59, 0.45) 0%, rgba(15, 23, 42, 0.65) 100%)", borderColor: "rgba(139, 92, 246, 0.3)" }}>
+              <h4 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Markov Chain MCMC</span>
+                <span className="mai-engine-badge python" style={{ background: "rgba(139, 92, 246, 0.15)", color: "#a78bfa", border: "1px solid rgba(139, 92, 246, 0.35)" }}>MCMC</span>
+              </h4>
+              <p className="mai-adv-note">Transiciones de estado simuladas minuto a minuto</p>
+              
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px" }}>
+                  <span style={{ color: "var(--muted)" }}>P(Gol por minuto):</span>
+                  <b>{round2((advanced.multiMarket.mcmcSimulation?.transitionProbabilityGoal ?? 0) * 100)}%</b>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px" }}>
+                  <span style={{ color: "var(--muted)" }}>P(Córner por minuto):</span>
+                  <b>{round2((advanced.multiMarket.mcmcSimulation?.transitionProbabilityCorner ?? 0) * 100)}%</b>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px" }}>
+                  <span style={{ color: "var(--muted)" }}>P(Tarjeta por minuto):</span>
+                  <b>{round2((advanced.multiMarket.mcmcSimulation?.transitionProbabilityCard ?? 0) * 100)}%</b>
+                </div>
+              </div>
+
+              <div style={{ marginTop: "12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "var(--muted)", marginBottom: "4px" }}>
+                  <span>Tensión del Partido:</span>
+                  <b>{advanced.multiMarket.mcmcSimulation?.averageGameTension ?? 50}%</b>
+                </div>
+                <div style={{ height: "6px", background: "rgba(255,255,255,0.06)", borderRadius: "3px", overflow: "hidden" }}>
+                  <div style={{ 
+                    width: `${advanced.multiMarket.mcmcSimulation?.averageGameTension ?? 50}%`, 
+                    background: "linear-gradient(90deg, #8b5cf6, #ec4899)", 
+                    height: "100%" 
+                  }} />
+                </div>
+              </div>
+            </div>
+
+            {/* --- Smart Money & Odds Dropping Tracker Visual Card --- */}
+            <div className="mai-adv-card" style={{ 
+              background: advanced.multiMarket.oddsDroppingTracker?.steamMoveDetected 
+                ? "linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(15, 23, 42, 0.65) 100%)" 
+                : "linear-gradient(135deg, rgba(30, 41, 59, 0.45) 0%, rgba(15, 23, 42, 0.65) 100%)", 
+              borderColor: advanced.multiMarket.oddsDroppingTracker?.steamMoveDetected 
+                ? "rgba(245, 158, 11, 0.4)" 
+                : "var(--line)",
+              transition: "all 0.3s ease"
+            }}>
+              <h4 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Smart Money & Steam Moves</span>
+                <span className="mai-engine-badge ts" style={{ 
+                  background: advanced.multiMarket.oddsDroppingTracker?.steamMoveDetected ? "rgba(245, 158, 11, 0.2)" : "rgba(255,255,255,0.06)", 
+                  color: advanced.multiMarket.oddsDroppingTracker?.steamMoveDetected ? "#f59e0b" : "var(--muted)", 
+                  border: advanced.multiMarket.oddsDroppingTracker?.steamMoveDetected ? "1px solid rgba(245, 158, 11, 0.4)" : "1px solid var(--line)"
+                }}>Steam Tracker</span>
+              </h4>
+              <p className="mai-adv-note">Seguimiento de caídas bruscas y flujos institucionales de dinero</p>
+              
+              <div className="mai-features" style={{ marginTop: "8px" }}>
+                <div>
+                  <span>Caída Cuota</span>
+                  <b style={{ color: advanced.multiMarket.oddsDroppingTracker?.steamMoveDetected ? "#f59e0b" : "var(--text)" }}>
+                    {advanced.multiMarket.oddsDroppingTracker?.dropPercent ?? 0}%
+                  </b>
+                </div>
+                <div>
+                  <span>Diferencia</span>
+                  <b>{advanced.multiMarket.oddsDroppingTracker?.openingVsActiveDiff.toFixed(2) ?? "0.00"}</b>
+                </div>
+              </div>
+
+              <div style={{ marginTop: "12px", textAlign: "center" }}>
+                {advanced.multiMarket.oddsDroppingTracker?.steamMoveDetected ? (
+                  <span style={{ 
+                    display: "inline-block", 
+                    width: "100%", 
+                    padding: "5px 8px", 
+                    borderRadius: "6px", 
+                    background: "rgba(245, 158, 11, 0.15)", 
+                    color: "#f59e0b", 
+                    fontSize: "10px", 
+                    fontWeight: "bold",
+                    textTransform: "uppercase",
+                    boxShadow: "0 0 10px rgba(245, 158, 11, 0.1)",
+                    border: "1px solid rgba(245, 158, 11, 0.3)"
+                  }}>
+                    🔥 Steam Move (Respaldo Institucional)
+                  </span>
+                ) : (
+                  <span style={{ 
+                    display: "inline-block", 
+                    width: "100%", 
+                    padding: "4px 8px", 
+                    borderRadius: "6px", 
+                    background: "rgba(255, 255, 255, 0.05)", 
+                    color: "var(--muted)", 
+                    fontSize: "10px", 
+                    fontWeight: "bold"
+                  }}>
+                    Flujos de Mercado Estables
+                  </span>
+                )}
+              </div>
+            </div>
+          </>
+        )}
         <div className="mai-adv-card">
           <h4>xG blend <EngineBadge engine={sources?.xgModel} /></h4>
           <div className="mai-features">
@@ -396,12 +647,54 @@ export function AdvancedTab({ analysis, fixture }: { analysis: AnalysisResult; f
             <div><span>BTTS (xG)</span><b>{advanced.xgModel.bttsFromXg}%</b></div>
           </div>
         </div>
-        <div className="mai-adv-card">
+        <div className="mai-adv-card" style={{ gridColumn: "span 2" }}>
           <h4>Explicabilidad <EngineBadge engine={sources?.explainability} /></h4>
-          <div className="mai-features">
+          <div className="mai-features" style={{ marginBottom: "12px" }}>
             <div><span>Método</span><b>{advanced.explainability.method}</b></div>
-            <div><span>Driver #1</span><b>{advanced.explainability.topDrivers[0]?.feature ?? "—"} ({advanced.explainability.topDrivers[0]?.impact ?? 0})</b></div>
+            <div><span>Driver Dominante</span><b>{advanced.explainability.topDrivers[0]?.feature ?? "—"} ({advanced.explainability.topDrivers[0]?.impact ?? 0})</b></div>
             <div><span>Outcome</span><b>{advanced.explainability.dominantOutcome}</b></div>
+          </div>
+          
+          <div style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "12px" }}>
+            <span style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#64748b", fontWeight: "bold", display: "block", marginBottom: "8px" }}>
+              Factores Clave (Valores SHAP)
+            </span>
+            {advanced.explainability.topDrivers && advanced.explainability.topDrivers.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                {advanced.explainability.topDrivers.map((driver) => {
+                  const isPositive = driver.impact >= 0;
+                  const absImpact = Math.abs(driver.impact);
+                  const maxImpact = Math.max(
+                    ...advanced.explainability.topDrivers.map((d) => Math.abs(d.impact)),
+                    0.01
+                  );
+                  const barWidth = `${Math.min(100, (absImpact / maxImpact) * 100)}%`;
+                  return (
+                    <div key={driver.feature} style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                      <span style={{ flex: "1", minWidth: "110px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#94a3b8", fontSize: "11px" }} title={driver.feature}>
+                        {driver.feature}
+                      </span>
+                      <div style={{ flex: "2", height: "8px", background: "rgba(255,255,255,0.05)", borderRadius: "4px", overflow: "hidden", position: "relative" }}>
+                        <div 
+                          style={{ 
+                            height: "100%", 
+                            width: barWidth, 
+                            background: isPositive ? "#34d399" : "#f43f5e", 
+                            borderRadius: "4px",
+                            transition: "width 0.3s ease" 
+                          }} 
+                        />
+                      </div>
+                      <span style={{ minWidth: "50px", textAlign: "right", fontSize: "11px", fontWeight: "bold", color: isPositive ? "#34d399" : "#f43f5e" }}>
+                        {isPositive ? "+" : ""}{driver.impact.toFixed(3)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <span style={{ fontSize: "11px", color: "#64748b" }}>Sin factores clave</span>
+            )}
           </div>
         </div>
         <div className="mai-adv-card">
@@ -445,6 +738,42 @@ export function AdvancedTab({ analysis, fixture }: { analysis: AnalysisResult; f
             <div><span>P(1-1)</span><b>{advanced.dixonColes.prob11}%</b></div>
           </div>
         </div>
+        {advanced.hybridPipeline?.active && (
+          <div className="mai-adv-card">
+            <h4>Pipeline híbrido DC→XGB</h4>
+            <div className="mai-features">
+              <div><span>λ local</span><b>{advanced.hybridPipeline.lambdaLocal}</b></div>
+              <div><span>μ visita</span><b>{advanced.hybridPipeline.muVisitante}</b></div>
+              <div><span>Motor</span><b>{advanced.hybridPipeline.modelsUsed.join(", ")}</b></div>
+              {advanced.hybridPipeline.dixonColes1x2 && (
+                <div>
+                  <span>DC 1X2</span>
+                  <b>
+                    {advanced.hybridPipeline.dixonColes1x2.homeWin}% / {advanced.hybridPipeline.dixonColes1x2.draw}% / {advanced.hybridPipeline.dixonColes1x2.awayWin}%
+                  </b>
+                </div>
+              )}
+              {advanced.hybridPipeline.marketPrior1x2 && (
+                <div>
+                  <span>Mercado 1X2</span>
+                  <b>
+                    {advanced.hybridPipeline.marketPrior1x2.homeWin}% / {advanced.hybridPipeline.marketPrior1x2.draw}% / {advanced.hybridPipeline.marketPrior1x2.awayWin}%
+                  </b>
+                </div>
+              )}
+            </div>
+            {advanced.hybridPipeline.consistencyFlags && advanced.hybridPipeline.consistencyFlags.length > 0 && (
+              <p className="mai-adv-note">
+                Compuerta activa: {advanced.hybridPipeline.consistencyFlags.join(", ")}. El 1X2 final fue reconciliado antes de calcular value y Kelly.
+              </p>
+            )}
+            {advanced.hybridPipeline.exactScoreTop.length > 0 && (
+              <p className="mai-adv-note">
+                Marcador top: {advanced.hybridPipeline.exactScoreTop.slice(0, 3).map((s) => `${s.score} (${s.probability}%)`).join(" · ")}
+              </p>
+            )}
+          </div>
+        )}
         <div className="mai-adv-card">
           <h4>Skellam / Handicap</h4>
           <div className="mai-features">
@@ -557,6 +886,65 @@ export function KellyTab({ analysis, fixture: _fixture }: { analysis: AnalysisRe
           <small>riesgo/retorno</small>
         </div>
       </div>
+
+      {analysis.advancedModels?.multiMarket?.qLearningStakes && (
+        <div style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "16px",
+          padding: "16px",
+          margin: "16px 0",
+          border: "1px solid rgba(139, 92, 246, 0.25)",
+          borderRadius: "10px",
+          background: "linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(15, 23, 42, 0.6) 100%)",
+        }}>
+          <div>
+            <span style={{ 
+              display: "block", 
+              fontSize: "10px", 
+              color: "#a78bfa", 
+              textTransform: "uppercase",
+              fontWeight: "bold",
+              letterSpacing: "0.05em"
+            }}>
+              Optimizador Reinforcement Learning (Q-Learning)
+            </span>
+            <strong style={{ display: "block", fontSize: "15px", margin: "4px 0", color: "#f8fafc" }}>
+              Stakes Sugeridos por Agente RL
+            </strong>
+            <p style={{ margin: 0, fontSize: "11px", color: "var(--muted)", lineHeight: "1.4" }}>
+              {analysis.advancedModels.multiMarket.qLearningStakes.stateDescription} · Win Rate Reciente: {round1(analysis.advancedModels.multiMarket.qLearningStakes.recentWinRate * 100)}%
+            </p>
+          </div>
+          
+          <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
+            <div style={{ textAlign: "right" }}>
+              <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase", display: "block" }}>Acción RL</span>
+              <strong style={{ 
+                color: analysis.advancedModels.multiMarket.qLearningStakes.optimalAction === "aggressive" ? "#34d399" : analysis.advancedModels.multiMarket.qLearningStakes.optimalAction === "conservative" ? "#f43f5e" : "#f59e0b",
+                fontSize: "11px",
+                textTransform: "uppercase",
+                background: analysis.advancedModels.multiMarket.qLearningStakes.optimalAction === "aggressive" ? "rgba(52, 211, 153, 0.12)" : analysis.advancedModels.multiMarket.qLearningStakes.optimalAction === "conservative" ? "rgba(244, 63, 94, 0.12)" : "rgba(245, 158, 11, 0.12)",
+                padding: "2px 8px",
+                borderRadius: "4px",
+                display: "inline-block",
+                marginTop: "4px",
+                fontWeight: "bold"
+              }}>
+                {analysis.advancedModels.multiMarket.qLearningStakes.optimalAction}
+              </strong>
+            </div>
+            
+            <div style={{ textAlign: "right", minWidth: "80px" }}>
+              <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase", display: "block" }}>Stake RL</span>
+              <b style={{ display: "block", fontSize: "22px", color: "#a78bfa" }}>
+                {analysis.advancedModels.multiMarket.qLearningStakes.suggestedStakes.toFixed(1)}u
+              </b>
+            </div>
+          </div>
+        </div>
+      )}
 
       {kelly.bets.length > 0 ? (
         <div className="mai-kelly-bets">
@@ -734,7 +1122,12 @@ export function PipelineTab({
             className="mai-conf-fill"
             style={{
               width: `${displayedConfidence}%`,
-              background: displayedConfidence >= 68 ? "#34d399" : displayedConfidence >= 52 ? "#f59e0b" : "#f43f5e",
+              background:
+                displayedConfidence >= CONFIDENCE_THRESHOLDS.bet
+                  ? "#34d399"
+                  : displayedConfidence >= CONFIDENCE_THRESHOLDS.caution
+                    ? "#f59e0b"
+                    : "#f43f5e",
             }}
           />
         </div>

@@ -1,17 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { unwrapApiData } from "@/frontend/lib/api-response";
 import type { FixtureOddsMap } from "@/frontend/lib/merge-fixture-odds";
+import { todayIsoDateColombia } from "@/frontend/lib/date-utils";
 
-async function fetchOddsByDate(
-  date: string,
-  leagueId?: string,
-  fixtureIds?: string[]
-): Promise<FixtureOddsMap> {
+async function fetchOddsByDate(date: string, leagueId?: string): Promise<FixtureOddsMap> {
   const params = new URLSearchParams({ date });
   if (leagueId) params.set("leagueId", leagueId);
-  if (fixtureIds && fixtureIds.length > 0) {
-    params.set("fixtureIds", fixtureIds.join(","));
-  }
   const response = await fetch(`/api/odds/by-date?${params.toString()}`);
   if (!response.ok) {
     throw new Error(`Error al cargar odds (${response.status})`);
@@ -23,18 +17,16 @@ async function fetchOddsByDate(
 export function useOddsByDate(
   date: string,
   leagueId?: string,
-  options?: { enabled?: boolean; fixtureIds?: string[] }
+  options?: { enabled?: boolean }
 ) {
-  const fixtureIds = options?.fixtureIds;
-  const fixtureKey = fixtureIds?.length ? fixtureIds.join(",") : "";
-
   return useQuery<FixtureOddsMap, Error>({
-    queryKey: ["odds-by-date", date, leagueId ?? "all", fixtureKey],
-    queryFn: () => fetchOddsByDate(date, leagueId, fixtureIds),
+    queryKey: ["odds-by-date", date, leagueId ?? "all"],
+    queryFn: () => fetchOddsByDate(date, leagueId),
     enabled: (options?.enabled ?? true) && Boolean(date),
     staleTime: 60_000,
+    refetchInterval: date === todayIsoDateColombia() ? 90_000 : false,
     refetchOnMount: "always",
-    retry: 1,
+    retry: 2,
     placeholderData: {},
   });
 }

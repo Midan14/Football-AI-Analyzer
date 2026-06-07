@@ -18,6 +18,7 @@ import type { Fixture, AnalysisResult } from "@/shared/domain";
 import type { ModelRun } from "./model-runs-builder";
 import { modelModes, scenarios, type ModelMode, type ScenarioId, type DensityMode } from "./dashboard-config";
 import { round } from "./dashboard-utils";
+import { CONFIDENCE_THRESHOLDS, decisionFromConfidence } from "@/shared/confidence-thresholds";
 
 export function TopSelect({
   label,
@@ -167,12 +168,13 @@ export function DecisionPanel({
 }) {
   const decision = !analysis
     ? "SIN DATOS"
-    : confidence >= 68 && actionableMarkets > 0
-      ? "GO"
-      : confidence >= 52
-        ? "WAIT"
-        : "NO BET";
-  const decisionTone = decision === "GO" ? "go" : decision === "WAIT" ? "wait" : "stop";
+    : (() => {
+        const baseDecision = decisionFromConfidence(confidence);
+        if (baseDecision === "APOSTAR" && actionableMarkets > 0) return "APOSTAR";
+        if (baseDecision === "PRECAUCION") return "PRECAUCIÓN";
+        return "NO APOSTAR";
+      })();
+  const decisionTone = decision === "APOSTAR" ? "go" : decision === "PRECAUCIÓN" ? "wait" : "stop";
   const topEdge = analysis?.valueTable.slice().sort((a, b) => b.edge - a.edge)[0];
 
   return (
@@ -503,7 +505,7 @@ export function ViewConsole({
       kicker: "Vista activa",
       title: "Dashboard Global",
       body: `Resumen operativo para ${country}, ${league}. Backend activo, proveedor configurado y motor AI listo para calcular mercados con penalizaciones de riesgo.`,
-      chips: ["API interna", "KPIs", "Riesgo", "Watchlist"],
+      chips: ["API interna", "KPIs", "Riesgo", "Favoritos"],
     },
     "Match Center": {
       kicker: "Partido seleccionado",
@@ -566,8 +568,8 @@ export function ViewConsole({
     },
     Watchlist: {
       kicker: "Seguimiento",
-      title: "Partidos marcados y alertas simuladas",
-      body: "Las estrellas y filas de watchlist son botones reales. Permiten marcar fixtures, abrir el Match Center y mantener seguimiento operativo.",
+      title: "Partidos favoritos y alertas simuladas",
+      body: "Las estrellas y filas de favoritos son botones reales. Permiten marcar fixtures, abrir el Match Center y mantener seguimiento operativo.",
       chips: ["Favoritos", "Notificaciones", "Stake", "Seguimiento"],
     },
     Informes: {

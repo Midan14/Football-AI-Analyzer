@@ -19,6 +19,7 @@ const PUBLIC_ROUTES = [
   "/api/live",
   "/api/openapi",
   "/api/health",
+  "/api/ml/status",
   "/api/cron",
 ];
 

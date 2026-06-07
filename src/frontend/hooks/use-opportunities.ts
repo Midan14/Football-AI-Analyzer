@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "next-auth/react";
+import { CONFIDENCE_THRESHOLDS } from "@/shared/confidence-thresholds";
 
 export type OpportunitiesScope = "day" | "watchlist";
 
@@ -9,6 +10,9 @@ export function useOpportunities(options: {
   scope?: OpportunitiesScope;
   minEdge?: number;
   minConfidence?: number;
+  minEv?: number;
+  autoTrack?: boolean;
+  radarMode?: boolean;
 }) {
   const { data: session } = useSession();
   const {
@@ -16,16 +20,31 @@ export function useOpportunities(options: {
     leagueId,
     scope = "day",
     minEdge = 3,
-    minConfidence = 55,
+    minConfidence = CONFIDENCE_THRESHOLDS.caution,
+    minEv = 0,
+    autoTrack = false,
+    radarMode = false,
   } = options;
 
   return useQuery({
-    queryKey: ["opportunities", date, leagueId ?? "all", scope, minEdge, minConfidence],
+    queryKey: [
+      "opportunities",
+      date,
+      leagueId ?? "all",
+      scope,
+      minEdge,
+      minConfidence,
+      minEv,
+      autoTrack,
+      radarMode,
+    ],
     queryFn: async () => {
       const params = new URLSearchParams({
         date,
         minEdge: String(minEdge),
         minConfidence: String(minConfidence),
+        minEv: String(minEv),
+        autoTrack: autoTrack ? "1" : "0",
         scope,
       });
       if (leagueId) params.set("leagueId", leagueId);
@@ -34,7 +53,7 @@ export function useOpportunities(options: {
       return res.json();
     },
     enabled: Boolean(session?.user?.id && date),
-    staleTime: 45_000,
-    refetchInterval: 90_000,
+    staleTime: radarMode ? 8_000 : 45_000,
+    refetchInterval: radarMode ? 20_000 : 90_000,
   });
 }

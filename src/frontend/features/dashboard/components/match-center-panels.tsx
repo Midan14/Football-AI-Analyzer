@@ -1,9 +1,11 @@
 "use client";
 
-import { AlertTriangle, Cloud, Plane, ShieldCheck, TrendingUp, UsersRound } from "lucide-react";
-import type { AnalysisResult, Fixture, H2HRecord, SquadDynamic } from "@/shared/domain";
+import { AlertTriangle, Cloud, MapPin, Plane, ShieldCheck, Thermometer, TrendingUp, UsersRound } from "lucide-react";
+import type { AnalysisResult, Fixture, H2HRecord, MatchLineup, SquadDynamic } from "@/shared/domain";
+import { motivationLabel } from "@/frontend/lib/match-event-display";
+import { MatchSquadPanel } from "./match-squad-panel";
 
-export type MatchCenterTab = "resumen" | "h2h" | "partido" | "contexto";
+export type MatchCenterTab = "resumen" | "h2h" | "partido" | "plantilla" | "contexto";
 
 export function MatchCenterTabBar({
   activeTab,
@@ -22,6 +24,7 @@ export function MatchCenterTabBar({
     { id: "resumen", label: "Análisis" },
     { id: "h2h", label: "H2H", count: fixture.h2h?.length },
     { id: "partido", label: "En vivo", count: lineupsCount + eventsCount || undefined },
+    { id: "plantilla", label: "Plantilla", count: lineupsCount || undefined },
     { id: "contexto", label: "Contexto" },
   ];
 
@@ -151,11 +154,13 @@ export function MatchCenterH2HPanel({ fixture }: { fixture: Fixture }) {
 function InjuryList({
   teamName,
   injuries,
+  suspensions = [],
 }: {
   teamName: string;
   injuries: SquadDynamic["injuries"];
+  suspensions?: SquadDynamic["suspensions"];
 }) {
-  if (!injuries || injuries.length === 0) {
+  if ((!injuries || injuries.length === 0) && suspensions.length === 0) {
     return (
       <div className="mc-injury-team">
         <strong>{teamName}</strong>
@@ -177,18 +182,64 @@ function InjuryList({
             </span>
           </li>
         ))}
+        {suspensions.map((sus, i) => (
+          <li key={`${sus.player}-sus-${i}`} className="mc-injury-row mc-suspension-row">
+            <span>{sus.player}</span>
+            <small>Suspendido</small>
+          </li>
+        ))}
       </ul>
     </div>
   );
 }
 
+export function MatchCenterSquadPanel({
+  fixture,
+  lineups,
+}: {
+  fixture: Fixture;
+  lineups?: MatchLineup[];
+}) {
+  return <MatchSquadPanel fixture={fixture} lineups={lineups} />;
+}
+
 export function MatchCenterContextPanel({ fixture, analysis }: { fixture: Fixture; analysis: AnalysisResult }) {
   const homeInj = fixture.squad?.home.injuries ?? [];
   const awayInj = fixture.squad?.away.injuries ?? [];
+  const homeSus = fixture.squad?.home.suspensions ?? [];
+  const awaySus = fixture.squad?.away.suspensions ?? [];
 
   return (
     <div className="mc-panel mc-context">
       <div className="mc-context-grid">
+        <div className="mc-context-card">
+          <MapPin size={18} />
+          <div>
+            <span>Estadio</span>
+            <strong>{fixture.venue?.name ?? "Por confirmar"}</strong>
+            <small>
+              {[fixture.venue?.city, fixture.venue?.country].filter(Boolean).join(" · ") || "Ubicación no disponible"}
+            </small>
+          </div>
+        </div>
+        <div className="mc-context-card">
+          <Thermometer size={18} />
+          <div>
+            <span>{fixture.weather?.source === "open-meteo" ? "Clima (Open-Meteo)" : "Clima estimado"}</span>
+            <strong>
+              {fixture.weather?.temperatureC != null ? `${fixture.weather.temperatureC}°C` : "N/D"}
+              {fixture.weather?.condition ? ` · ${fixture.weather.condition}` : ""}
+            </strong>
+            <small>
+              {fixture.weather?.description ??
+                (fixture.context.weatherRisk === "high"
+                  ? "Riesgo alto"
+                  : fixture.context.weatherRisk === "medium"
+                    ? "Moderado"
+                    : "Normal")}
+            </small>
+          </div>
+        </div>
         <div className="mc-context-card">
           <ShieldCheck size={18} />
           <div>
@@ -206,7 +257,10 @@ export function MatchCenterContextPanel({ fixture, analysis }: { fixture: Fixtur
           <div>
             <span>Viaje visitante</span>
             <strong>{fixture.away.travelKm} km</strong>
-            <small>Descanso local {fixture.home.restDays}d · visita {fixture.away.restDays}d</small>
+            <small>
+              {fixture.away.travelNote ??
+                `Descanso local ${fixture.home.restDays}d · visita ${fixture.away.restDays}d`}
+            </small>
           </div>
         </div>
         <div className="mc-context-card">
@@ -214,7 +268,8 @@ export function MatchCenterContextPanel({ fixture, analysis }: { fixture: Fixtur
           <div>
             <span>Motivación</span>
             <strong>
-              {fixture.home.motivation} / {fixture.away.motivation}
+              {fixture.home.motivation} ({motivationLabel(fixture.home.motivation)}) / {fixture.away.motivation} (
+              {motivationLabel(fixture.away.motivation)})
             </strong>
             <small>Local vs visitante (0-100)</small>
           </div>
@@ -222,7 +277,7 @@ export function MatchCenterContextPanel({ fixture, analysis }: { fixture: Fixtur
         <div className="mc-context-card">
           <Cloud size={18} />
           <div>
-            <span>Clima / contexto</span>
+            <span>Contexto competitivo</span>
             <strong>{fixture.context.weatherRisk === "high" ? "Riesgo alto" : fixture.context.weatherRisk === "medium" ? "Moderado" : "Normal"}</strong>
             <small>
               {fixture.context.derby ? "Derbi · " : ""}
@@ -234,12 +289,12 @@ export function MatchCenterContextPanel({ fixture, analysis }: { fixture: Fixtur
         </div>
       </div>
 
-      {(homeInj.length > 0 || awayInj.length > 0) && (
+      {(homeInj.length > 0 || awayInj.length > 0 || homeSus.length > 0 || awaySus.length > 0) && (
         <div className="mc-injuries-block">
-          <h4><AlertTriangle size={14} /> Bajas confirmadas</h4>
+          <h4><AlertTriangle size={14} /> Lesionados y suspendidos</h4>
           <div className="mc-injuries-grid">
-            <InjuryList teamName={fixture.home.name} injuries={homeInj} />
-            <InjuryList teamName={fixture.away.name} injuries={awayInj} />
+            <InjuryList teamName={fixture.home.name} injuries={homeInj} suspensions={homeSus} />
+            <InjuryList teamName={fixture.away.name} injuries={awayInj} suspensions={awaySus} />
           </div>
         </div>
       )}

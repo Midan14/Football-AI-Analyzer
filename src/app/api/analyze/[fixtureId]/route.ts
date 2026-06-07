@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { analyzeMatch } from "@/backend/server/football/football-service";
+import { analyzeMatch, getMatch } from "@/backend/server/football/football-service";
 import { z } from "zod";
 import { successResponse, errorResponse, withErrorHandling, Errors } from "@/lib/api-utils";
 import { cache, cacheKeys } from "@/lib/cache";
@@ -16,6 +16,7 @@ import {
   ANALYSIS_SCENARIO_IDS,
   type AnalysisPreferences,
 } from "@/shared/analysis-preferences";
+import { mergeFixtureResult } from "@/backend/lib/fixtures/fixture-score-resolver";
 import { AnalysisQuerySchema } from "@/lib/schemas/analysis";
 
 const FixtureIdSchema = z.object({
@@ -60,9 +61,17 @@ export const GET = withErrorHandling(async (_request: NextRequest, context: { pa
     preferences.scenario
   );
   if (!forceRefresh) {
-    const cached = await cache.get(cacheKey);
+    const cached = await cache.get<MatchAnalysisResponse>(cacheKey);
     if (cached) {
       addBreadcrumb(`Analysis cache hit for ${validatedFixtureId}`, "analysis", "info");
+      try {
+        const { match: freshFixture } = await getMatch(validatedFixtureId);
+        if (freshFixture?.result && cached.fixture) {
+          cached.fixture = mergeFixtureResult(cached.fixture, freshFixture);
+        }
+      } catch {
+        // Non-fatal — serve cached payload if refresh fails
+      }
       return successResponse(cached);
     }
   }

@@ -3,6 +3,7 @@ import { demoFixtures } from "@/backend/lib/providers/demo-data";
 import {
   ensureAdvancedModelsComplete,
   blendMultiModelAnalysis,
+  applyRoiCalibrationToAnalysis,
   runFullAnalysis,
 } from "./analysis-orchestrator";
 import { analyzeFixture } from "./analysis-engine";
@@ -14,6 +15,10 @@ vi.mock("@/backend/lib/ml/predictor", () => ({
 
 vi.mock("./ml-client", () => ({
   getExtendedMLPrediction: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("@/backend/lib/ml/ml-service-manager", () => ({
+  ensureMLServiceRunning: vi.fn().mockResolvedValue(false),
 }));
 
 describe("analysis-orchestrator", () => {
@@ -45,11 +50,34 @@ describe("analysis-orchestrator", () => {
     expect(blended.probabilities.over25).toBeGreaterThan(0);
   });
 
+  it("applyRoiCalibrationToAnalysis blocks recommendations with negative historical ROI", () => {
+    const base = analyzeFixture(demoFixtures[0]);
+    const row = base.valueTable.find((r) => r.market === base.recommendation.market) ?? base.valueTable[0];
+    const adjusted = applyRoiCalibrationToAnalysis(base, demoFixtures[0], {
+      marketMetrics: {
+        key: "WIN_1X2",
+        sampleSize: 40,
+        hitRate: Math.max(0.1, row.modelProbability / 100 - 0.1),
+        totalRoi: -5,
+        roiPerUnit: -0.12,
+        brier: 0.31,
+        logLoss: 0.9,
+        avgClvPercent: -2,
+        clvSampleSize: 20,
+      },
+    });
+
+    expect(adjusted.recommendation.market).toBe("Sin valor claro");
+    expect(adjusted.recommendation.stakeUnits).toBe(0);
+    expect(adjusted.recommendation.rationale).toContain("ROI historico negativo");
+    expect(adjusted.advancedModels?.calibration).toBeDefined();
+  });
+
   it("runFullAnalysis never throws and returns analysis", async () => {
     const result = await runFullAnalysis(demoFixtures[0]);
     expect(result.analysis.probabilities.homeWin).toBeGreaterThan(0);
     expect(result.analysis.advancedModels?.halfTime).toBeDefined();
     expect(result.analysisPipeline.layers).toContain("typescript");
     expect(result.analysisPipeline.label).toMatch(/Motor:/);
-  });
+  }, 15000);
 });

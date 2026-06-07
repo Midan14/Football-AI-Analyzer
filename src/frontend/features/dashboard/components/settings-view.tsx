@@ -40,7 +40,6 @@ export function SettingsView({
   onScenarioChange,
   onDensityChange,
   onBankrollChange,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onProviderClick,
 }: SettingsViewProps) {
   const [name, setName] = useState("");
@@ -263,13 +262,22 @@ export function SettingsView({
         {/* Proveedor de datos */}
         <article className="cfg-card">
           <h3><Database size={16} /> Proveedor de Datos</h3>
-          <div className="cfg-provider">
+          <button type="button" className="cfg-provider" onClick={onProviderClick} title="Ver estado del proveedor">
             <div className="cfg-provider-info">
               <strong>{providerStatus?.provider ?? provider}</strong>
               <span>{providerStatus?.message ?? "Estado del proveedor pendiente"}</span>
             </div>
-            <span className="cfg-provider-status">● {providerStatus?.status ?? "Activo"}</span>
-          </div>
+            <span className="cfg-provider-status">
+              ●{" "}
+              {providerStatus?.status === "healthy"
+                ? "Saludable"
+                : providerStatus?.status === "degraded"
+                  ? "Degradado"
+                  : providerStatus?.status === "unhealthy"
+                    ? "No saludable"
+                    : "Activo"}
+            </span>
+          </button>
           <div className="cfg-provider-details">
             <div><span>Backend</span><b>{providerStatus?.provider ?? provider}</b></div>
             <div><span>Redis</span><b>{providerStatus?.redis ?? "desconocido"}</b></div>
@@ -291,7 +299,7 @@ export function SettingsView({
             <div><span>Staking</span><b>Kelly Fraccional (25%)</b></div>
             <div><span>Simulación</span><b>Monte Carlo híbrido 50k</b></div>
             <div><span>Heavy Tail</span><b>Binomial negativa</b></div>
-            <div><span>Actualización</span><b>15s (live) / 60s (pre)</b></div>
+            <div><span>Actualización</span><b>10s (live) / 15-60s (según vista)</b></div>
             <div><span>Cache</span><b>Redis (TTL dinámico)</b></div>
           </div>
         </article>

@@ -48,12 +48,16 @@ describe("analyzeFixture - motor de análisis", () => {
     expect(result.recommendation.stakeUnits).toBeGreaterThan(0);
   });
 
-  it("genera radar de señal con 8 ejes", () => {
+  it("genera radar de señal con 8 ejes por equipo", () => {
     const result = analyzeFixture(demoFixtures[0]);
 
     expect(result.radar).toHaveLength(8);
     expect(result.radar[0]).toHaveProperty("axis");
+    expect(result.radar[0]).toHaveProperty("home");
+    expect(result.radar[0]).toHaveProperty("away");
     expect(result.radar[0]).toHaveProperty("value");
+    expect(result.radarHalfTime).toHaveLength(8);
+    expect(result.radarHalfTime?.[0].home).not.toBe(result.radarHalfTime?.[0].away);
   });
 
   it("detecta divergencia de mercado", () => {

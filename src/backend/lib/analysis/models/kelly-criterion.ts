@@ -1,4 +1,5 @@
 import type { FixtureMarket } from "@/shared/domain";
+import { getMarketOddsMap } from "../shared-math";
 
 /**
  * Kelly Criterion — Optimal stake sizing based on edge and bankroll.
@@ -121,25 +122,7 @@ export function kellyPortfolio(
   fixture: { market: FixtureMarket },
   confidence: number
 ): KellyPortfolio {
-  // Map market names to odds — ALL markets from buildValueTable must be here
-  const oddsMap: Record<string, number> = {
-    "Local gana": fixture.market.homeWinOdds ?? 0,
-    "Empate": fixture.market.drawOdds ?? 0,
-    "Visitante gana": fixture.market.awayWinOdds ?? 0,
-    "Doble Chance 1X": fixture.market.dc1xOdds ?? 0,
-    "Doble Chance X2": fixture.market.dcx2Odds ?? 0,
-    "Doble Chance 12": fixture.market.dc12Odds ?? 0,
-    "Over 1.5": fixture.market.over15Odds ?? 0,
-    "Over 2.5": fixture.market.over25Odds ?? 0,
-    "Over 3.5": fixture.market.over35Odds ?? 0,
-    "Under 1.5": fixture.market.under15Odds ?? 0,
-    "Under 2.5": fixture.market.under25Odds ?? 0,
-    "Under 3.5": fixture.market.under35Odds ?? 0,
-    "BTTS Sí": fixture.market.bttsYesOdds ?? 0,
-    "BTTS No": fixture.market.bttsNoOdds ?? 0,
-    "AH Local -1": fixture.market.ahHomeMinus1 ?? 0,
-    "AH Visitante +1": fixture.market.ahAwayPlus1 ?? 0,
-  };
+  const oddsMap = getMarketOddsMap(fixture);
 
   const bets: KellyResult[] = [];
 

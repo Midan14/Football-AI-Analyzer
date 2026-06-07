@@ -340,3 +340,55 @@ export function buildValueTable(
 
   return [...withOdds, ...referenceOnly];
 }
+
+export function getMarketOddsMap(fixture: { market: Fixture["market"] }): Record<string, number> {
+  return {
+    "Local gana": fixture.market.homeWinOdds ?? 0,
+    "Empate": fixture.market.drawOdds ?? 0,
+    "Visitante gana": fixture.market.awayWinOdds ?? 0,
+    "Doble Chance 1X": fixture.market.dc1xOdds ?? 0,
+    "Doble Chance X2": fixture.market.dcx2Odds ?? 0,
+    "Doble Chance 12": fixture.market.dc12Odds ?? 0,
+    "Over 1.5": fixture.market.over15Odds ?? 0,
+    "Over 2.5": fixture.market.over25Odds ?? 0,
+    "Over 3.5": fixture.market.over35Odds ?? 0,
+    "Under 1.5": fixture.market.under15Odds ?? 0,
+    "Under 2.5": fixture.market.under25Odds ?? 0,
+    "Under 3.5": fixture.market.under35Odds ?? 0,
+    "BTTS Sí": fixture.market.bttsYesOdds ?? 0,
+    "BTTS No": fixture.market.bttsNoOdds ?? 0,
+    "AH Local -1": fixture.market.ahHomeMinus1 ?? 0,
+    "AH Visitante +1": fixture.market.ahAwayPlus1 ?? 0,
+  };
+}
+
+export function getBookmakerOdds(fixture: Fixture, market: string): number {
+  return getMarketOddsMap(fixture)[market] ?? 0;
+}
+
+export const HEAVY_FAVORITE_MARKETS = new Set([
+  "Under 3.5",
+  "Under 2.5",
+  "Under 1.5",
+  "Over 1.5",
+]);
+
+export const MIN_RECOMMENDATION_ODDS = 1.55;
+export const HEAVY_FAVORITE_MIN_ODDS = 1.62;
+export const HEAVY_FAVORITE_MIN_EDGE = 8;
+
+export function expectedValuePerUnit(modelProbability: number, bookmakerOdds: number): number {
+  const p = modelProbability / 100;
+  return p * (bookmakerOdds - 1) - (1 - p);
+}
+
+export function isBlockedHeavyFavorite(market: string, bookmakerOdds: number, edge: number): boolean {
+  if (!HEAVY_FAVORITE_MARKETS.has(market)) return false;
+  return bookmakerOdds < HEAVY_FAVORITE_MIN_ODDS || edge < HEAVY_FAVORITE_MIN_EDGE;
+}
+
+export function meetsMinimumOdds(market: string, bookmakerOdds: number): boolean {
+  if (bookmakerOdds < MIN_RECOMMENDATION_ODDS) return false;
+  if (HEAVY_FAVORITE_MARKETS.has(market) && bookmakerOdds < HEAVY_FAVORITE_MIN_ODDS) return false;
+  return true;
+}

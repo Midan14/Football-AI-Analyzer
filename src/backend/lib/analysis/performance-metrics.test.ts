@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { computeMetrics } from "./performance-metrics";
 
 const sample = [
-  { market: "WIN_1X2", prediction: "HOME_WIN", status: "WON" as const, probability: 65, roi: 1.2, stakeUnits: 1 },
-  { market: "WIN_1X2", prediction: "DRAW", status: "LOST" as const, probability: 30, roi: -1, stakeUnits: 1 },
-  { market: "WIN_1X2", prediction: "HOME_WIN", status: "WON" as const, probability: 70, roi: 0.9, stakeUnits: 0.75 },
+  { market: "WIN_1X2", prediction: "HOME_WIN", status: "WON" as const, probability: 65, roi: 1.2, stakeUnits: 1, clvPercent: 2.5, modelKey: "hybrid" },
+  { market: "WIN_1X2", prediction: "DRAW", status: "LOST" as const, probability: 30, roi: -1, stakeUnits: 1, clvPercent: -1, modelKey: "hybrid" },
+  { market: "WIN_1X2", prediction: "HOME_WIN", status: "WON" as const, probability: 70, roi: 0.9, stakeUnits: 0.75, clvPercent: null, modelKey: "ts" },
   { market: "OVER_UNDER", prediction: "OVER_2.5", status: "LOST" as const, probability: 55, roi: -0.5, stakeUnits: 0.5 },
   { market: "OVER_UNDER", prediction: "OVER_2.5", status: "WON" as const, probability: 60, roi: 0.4, stakeUnits: 0.5 },
 ];
@@ -45,5 +45,20 @@ describe("computeMetrics", () => {
       expect(g.brier).toBeGreaterThanOrEqual(0);
       expect(g.brier).toBeLessThanOrEqual(1);
     }
+  });
+
+  it("computes log loss and average CLV when closing-line data exists", () => {
+    const m = computeMetrics(sample, "market");
+    const win1x2 = m.find((g) => g.key === "WIN_1X2")!;
+
+    expect(win1x2.logLoss).toBeGreaterThan(0);
+    expect(win1x2.avgClvPercent).toBeCloseTo(0.75, 2);
+    expect(win1x2.clvSampleSize).toBe(2);
+  });
+
+  it("can group by model key for champion/challenger monitoring", () => {
+    const m = computeMetrics(sample, "model");
+    expect(m.map((g) => g.key)).toContain("hybrid");
+    expect(m.map((g) => g.key)).toContain("ts");
   });
 });

@@ -4,6 +4,9 @@ import { Star, Trash2, Zap, Radio, Clock3 } from "lucide-react";
 import { useMemo } from "react";
 import type { Fixture } from "@/shared/domain";
 import { useLocalStorage } from "@/frontend/hooks/use-local-storage";
+import { FAVORITE_TEAM_IDS_KEY } from "@/frontend/lib/favorite-team-storage";
+import { formatKickoffTimeColombia } from "@/frontend/lib/date-utils";
+import { fixtureStatusLabelEs } from "@/shared/fixture-status";
 
 function sortFixtures(list: Fixture[]) {
   return [...list].sort((a, b) => {
@@ -45,15 +48,16 @@ function FixtureRow({
           </span>
         ) : fixture.status === "final" ? (
           <span className="wl-fx-final">FT</span>
+        ) : fixture.status === "postponed" ? (
+          <span className="wl-fx-postponed" title={fixture.statusLong}>
+            {fixtureStatusLabelEs("postponed", fixture.statusLong).slice(0, 4).toUpperCase()}
+          </span>
+        ) : fixture.status === "cancelled" ? (
+          <span className="wl-fx-cancelled" title={fixture.statusLong}>CANC</span>
         ) : (
           <span className="wl-fx-time">
             <Clock3 size={11} />
-            {new Date(fixture.kickoff).toLocaleTimeString("es-CO", {
-              hour: "2-digit",
-              minute: "2-digit",
-              hour12: false,
-              timeZone: "America/Bogota",
-            })}
+            {formatKickoffTimeColombia(fixture.kickoff)}
           </span>
         )}
       </div>
@@ -100,7 +104,8 @@ function FixtureRow({
       <button
         type="button"
         className={`wl-fx-star-btn ${isStarred ? "active" : ""}`}
-        title={isStarred ? "Quitar de watchlist" : "Marcar partido"}
+        title={isStarred ? "Quitar de favoritos" : "Marcar partido como favorito"}
+        aria-label={isStarred ? "Quitar de favoritos" : "Marcar partido como favorito"}
         onClick={(e) => {
           e.stopPropagation();
           onToggleStar(fixture);
@@ -127,10 +132,7 @@ export function WatchlistView({
   onToggleStar: (fixture: Fixture) => void;
   onOpenFixture: (fixture: Fixture) => void;
 }) {
-  const [favoriteTeams, setFavoriteTeams] = useLocalStorage<string[]>(
-    "live-sound-favorite-teams",
-    []
-  );
+  const [favoriteTeams, setFavoriteTeams] = useLocalStorage<string[]>(FAVORITE_TEAM_IDS_KEY, []);
 
   const starredOnDate = useMemo(
     () => sortFixtures(fixtures.filter((f) => starred.has(f.id))),
@@ -184,7 +186,7 @@ export function WatchlistView({
       <article className="wl-header">
         <div>
           <h2>
-            <Star size={22} /> Watchlist
+            <Star size={22} /> Favoritos
           </h2>
           <p>
             Partidos marcados con ⭐ y equipos favoritos en la fecha seleccionada ·{" "}
@@ -197,7 +199,7 @@ export function WatchlistView({
               <Radio size={12} /> {liveStarred} en vivo
             </span>
           )}
-          <span className="wl-stat">{starred.size} en watchlist</span>
+          <span className="wl-stat">{starred.size} en favoritos</span>
         </div>
       </article>
 
@@ -230,15 +232,15 @@ export function WatchlistView({
         <h4>Partidos ⭐ ({starredOnDate.length})</h4>
         {starredOffDateCount > 0 && (
           <p className="wl-offdate-hint">
-            {starredOffDateCount} partido{starredOffDateCount === 1 ? "" : "s"} de tu watchlist no
-            están en esta fecha — cambiá el día en el calendario para verlos.
+            {starredOffDateCount} partido{starredOffDateCount === 1 ? "" : "s"} de tus favoritos no
+            están en esta fecha — cambia el día en el calendario para verlos.
           </p>
         )}
         {starredOnDate.length === 0 ? (
           <div className="wl-empty compact">
             <Star size={32} />
             <strong>Sin partidos ⭐ en esta fecha</strong>
-            <p>Marcá partidos con la estrella en el tablero o en Partidos en Vivo.</p>
+            <p>Marca partidos con la estrella en el tablero o en Partidos en Vivo.</p>
           </div>
         ) : (
           <div className="wl-fixtures">
@@ -277,9 +279,9 @@ export function WatchlistView({
       {starred.size === 0 && favoriteTeams.length === 0 && (
         <div className="wl-empty">
           <Star size={40} />
-          <strong>Watchlist vacía</strong>
+          <strong>Lista de favoritos vacía</strong>
           <p>
-            Usá ⭐ en un partido para seguirlo aquí, o marcá equipos favoritos desde Partidos en Vivo.
+            Usa ⭐ en un partido para seguirlo aquí, o marca equipos favoritos desde Partidos en Vivo.
           </p>
         </div>
       )}

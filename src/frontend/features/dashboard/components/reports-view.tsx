@@ -1,9 +1,11 @@
 "use client";
 
-import { FileText, Download, Printer, TrendingUp, Shield, AlertTriangle, Target, BarChart3, Brain } from "lucide-react";
+import { FileText, Download, Printer, TrendingUp, Shield, AlertTriangle, Target, BarChart3, Brain, Layers } from "lucide-react";
 import type { Fixture, AnalysisResult } from "@/shared/domain";
-import { exportReportToPDF } from "@/frontend/lib/export-report";
+import { exportReportToPDF, exportAdvancedReportToPDF } from "@/frontend/lib/export-report";
+import { AdvancedReportPanel } from "./advanced-report-panel";
 import { ModelMode, ScenarioId } from "../dashboard-config";
+import { decisionFromConfidence } from "@/frontend/lib/confidence-display";
 
 export function ReportsView({
   fixture,
@@ -29,6 +31,15 @@ export function ReportsView({
     }
   };
 
+  const handleExportAdvanced = () => {
+    if (!fixture || !analysis) return;
+    try {
+      exportAdvancedReportToPDF(fixture, analysis, modelMode, scenario, riskLevel);
+    } catch {
+      alert("Error generando informe avanzado");
+    }
+  };
+
   const handlePrint = () => window.print();
 
   if (!fixture || !analysis) {
@@ -50,8 +61,19 @@ export function ReportsView({
     );
   }
 
-  const decision = analysis.confidence.score >= 68 ? "APOSTAR" : analysis.confidence.score >= 52 ? "PRECAUCIÓN" : "NO APOSTAR";
-  const decisionColor = analysis.confidence.score >= 68 ? "#34d399" : analysis.confidence.score >= 52 ? "#f59e0b" : "#f43f5e";
+  const baseDecision = decisionFromConfidence(analysis.confidence.score);
+  const decision =
+    baseDecision === "PRECAUCION"
+      ? "PRECAUCIÓN"
+      : baseDecision === "NO_APOSTAR"
+        ? "NO APOSTAR"
+        : "APOSTAR";
+  const decisionColor =
+    baseDecision === "APOSTAR"
+      ? "#34d399"
+      : baseDecision === "PRECAUCION"
+        ? "#f59e0b"
+        : "#f43f5e";
 
   return (
     <section className="view-workspace rpt-view">
@@ -63,6 +85,7 @@ export function ReportsView({
         </div>
         <div className="rpt-actions">
           <button className="rpt-btn" onClick={handleExportPDF}><Download size={14} /> Exportar PDF</button>
+          <button className="rpt-btn" onClick={handleExportAdvanced}><Layers size={14} /> Informe Avanzado (27 secciones)</button>
           <button className="rpt-btn" onClick={handlePrint}><Printer size={14} /> Imprimir</button>
           <button className="rpt-btn primary" onClick={onOpenMatch}>Match Center</button>
         </div>
@@ -153,7 +176,7 @@ export function ReportsView({
             </thead>
             <tbody>
               {analysis.valueTable.map(row => (
-                <tr key={row.market} className={row.edge > 3 ? "value" : row.edge < -7 ? "avoid" : ""}>
+                <tr key={row.market} className={row.edge >= 5 ? "value" : row.edge < -7 ? "avoid" : ""}>
                   <td>{row.market}</td>
                   <td>{row.modelProbability}%</td>
                   <td>{row.marketProbability}%</td>
@@ -198,6 +221,9 @@ export function ReportsView({
             </div>
           </div>
         )}
+
+        {/* Advanced 27-section report (in-app, identical to deep PDF format) */}
+        <AdvancedReportPanel fixture={fixture} analysis={analysis} />
 
         {/* Footer */}
         <div className="rpt-footer">

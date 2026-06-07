@@ -4,5 +4,9 @@ import { getMLStatus } from "@/backend/lib/analysis/ml-client";
 
 export async function GET(_request: NextRequest) {
   const status = await getMLStatus();
-  return successResponse(status);
+  const { getMLServiceManagerState } = await import("@/backend/lib/ml/ml-service-manager");
+  return successResponse({
+    ...status,
+    manager: getMLServiceManagerState(),
+  });
 }

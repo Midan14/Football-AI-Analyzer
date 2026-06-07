@@ -1,5 +1,9 @@
 export type CoverageTier = "elite" | "standard" | "low";
 
+import type { FixtureStatus } from "@/shared/fixture-status";
+
+export type { FixtureStatus };
+
 export type Country = {
   id: string;
   name: string;
@@ -14,6 +18,8 @@ export type League = {
   name: string;
   tier: CoverageTier;
   season: string;
+  /** men | women | youth | reserve | cup — inferred from league name/type */
+  category?: "men" | "women" | "youth" | "reserve" | "cup" | "other";
   coverageScore: number;
   logo?: string;
 };
@@ -86,6 +92,8 @@ export type TeamSnapshot = {
   tablePosition: number;
   restDays: number;
   travelKm: number;
+  /** Human-readable travel line when geocoded (optional). */
+  travelNote?: string;
   motivation: number;
   keyPlayer: string;
   keyPlayerStatus: "available" | "doubtful" | "injured" | "suspended";
@@ -106,6 +114,7 @@ export type FixtureCoverage = {
 };
 
 export type FixtureMarket = {
+  bookmakerName?: string;
   homeWinOdds: number;
   drawOdds: number;
   awayWinOdds: number;
@@ -160,6 +169,22 @@ export type SquadDynamic = {
   tacticalChangeRisk: number;
 };
 
+export type MatchVenue = {
+  name: string;
+  city?: string;
+  country?: string;
+};
+
+export type MatchWeather = {
+  temperatureC?: number;
+  condition?: string;
+  humidity?: number;
+  windKmh?: number;
+  description?: string;
+  /** Real provider when available; omitted or "estimate" for heuristics. */
+  source?: "open-meteo" | "estimate";
+};
+
 export type DeepContext = {
   derby: boolean;
   mustWinHome: boolean;
@@ -194,7 +219,9 @@ export type Fixture = {
   round?: string;
   kickoff: string;
   elapsed?: number | null;
-  status: "pre-match" | "live" | "final";
+  status: FixtureStatus;
+  statusShort?: string;
+  statusLong?: string;
   home: TeamSnapshot;
   away: TeamSnapshot;
   coverage: FixtureCoverage;
@@ -206,6 +233,8 @@ export type Fixture = {
   historicalOutliers?: HistoricalOutlier[];
   socialSentiment?: { homePositive: number; awayPositive: number; neutral: number };
   result?: MatchResult;
+  venue?: MatchVenue;
+  weather?: MatchWeather;
 };
 
 export type MatchResult = {
@@ -310,7 +339,8 @@ export type AnalysisResult = {
     penalties: Array<{ id: string; label: string; points: number }>;
   };
   riskFlags: Array<{ id: string; label: string; severity: "low" | "medium" | "high" }>;
-  radar: Array<{ axis: string; value: number }>;
+  radar: Array<{ axis: string; home: number; away: number; value: number }>;
+  radarHalfTime?: Array<{ axis: string; home: number; away: number; value: number }>;
   recommendation: {
     market: string;
     fairOdds: number;
@@ -462,6 +492,135 @@ export type AnalysisResult = {
       energy: number;
       topMarket: string | null;
     };
+    calibration?: {
+      rawProbability: number;
+      calibratedProbability: number;
+      adjustment: number;
+      source: "market" | "league" | "global" | "none";
+      reliability: "high" | "medium" | "low";
+      sampleSize: number;
+      abstained: boolean;
+      reason: string;
+    };
+    /** Dixon-Coles → XGBoost hybrid pipeline (unified markets) */
+    hybridPipeline?: {
+      active: boolean;
+      pipeline: string;
+      lambdaLocal: number;
+      muVisitante: number;
+      rho: number;
+      modelsUsed: string[];
+      exactScoreTop: Array<{ score: string; probability: number }>;
+      asianHandicap: Record<string, { Home?: number; Away?: number }>;
+      valueBets: Array<{
+        market: string;
+        modelProbability: number;
+        marketProbability: number;
+        edge: number;
+        odds?: number;
+      }>;
+      consistencyFlags?: string[];
+      dixonColes1x2?: { homeWin: number; draw: number; awayWin: number };
+      marketPrior1x2?: { homeWin: number; draw: number; awayWin: number } | null;
+    };
+    multiMarket?: {
+      goalCore: {
+        dixonColesReady: boolean;
+        xgIntegrated: boolean;
+        dynamicEloReady: boolean;
+        lowScoreCorrection: number;
+      };
+      cards: {
+        engine: string;
+        expectedTotalCards: number;
+        over45Cards: number;
+        refereeFactor: number;
+        hawkesIntensity: number;
+        xgboostFeatureScore: number;
+        dataQuality: number;
+        marketsUnlocked: string[];
+      };
+      corners: {
+        engine: string;
+        expectedTotalCorners: number;
+        over85Corners: number;
+        over95Corners: number;
+        pressureIndex: number;
+        ppdaProxy: number;
+        markovWingAttack: number;
+        dataQuality: number;
+        marketsUnlocked: string[];
+      };
+      playerProps: {
+        status: "ready" | "limited" | "blocked";
+        lineupConfidence: number;
+        playerXgProxy: number;
+        rotationRisk: number;
+        marketsUnlocked: string[];
+        dataGaps: string[];
+      };
+      live: {
+        bayesianUpdateReady: boolean;
+        gameStateIndex: number;
+        nextGoalHazard10m: number;
+        redCardAdjustmentReady: boolean;
+        sequenceModelStatus: "heuristic" | "lstm-ready" | "blocked";
+        criticalEvents: Array<{ event: string; impact: number }>;
+      };
+      externalContext: {
+        weatherImpact: number;
+        fatigueIndex: number;
+        motivationIndex: number;
+        newsSentimentStatus: "available" | "proxy" | "missing";
+        dataGaps: string[];
+      };
+      calibration: {
+        method: "platt-isotonic-ready" | "historical-proxy";
+        marketCalibrationScore: number;
+        valueFilterScore: number;
+        edgeThreshold: number;
+        applyBeforeKelly: boolean;
+      };
+      risk: {
+        kellyFraction: number;
+        drawdownLimit: number;
+        bankrollRuinRisk: number;
+        correlatedPickWarning: boolean;
+        portfolioMethod: string;
+        maxDailyExposure: number;
+      };
+      dataReadiness: Array<{ layer: string; score: number; status: "ready" | "limited" | "blocked"; reason: string }>;
+      expectedThreat?: {
+        fieldTilt: number;
+        homeXThreat: number;
+        awayXThreat: number;
+        dominanceRatio: number;
+      };
+      conformalRange?: {
+        homeWinRange: [number, number];
+        drawRange: [number, number];
+        awayWinRange: [number, number];
+        confidenceGuaranteed: boolean;
+      };
+      oddsDroppingTracker?: {
+        steamMoveDetected: boolean;
+        dropPercent: number;
+        oddsMovementStatus: string;
+        openingVsActiveDiff: number;
+      };
+      qLearningStakes?: {
+        stateDescription: string;
+        optimalAction: "conservative" | "standard" | "aggressive";
+        suggestedStakes: number;
+        recentWinRate: number;
+      };
+      mcmcSimulation?: {
+        transitionProbabilityGoal: number;
+        transitionProbabilityCorner: number;
+        transitionProbabilityCard: number;
+        averageGameTension: number;
+      };
+    };
     /** Which sections were computed by the Python ml-service vs TS fallback */
     modelSources?: {
       timeSeries?: string;
@@ -474,6 +633,7 @@ export type AnalysisResult = {
       cornersEsp?: string;
       cardsRisk?: string;
       xgModel?: string;
+      multiMarket?: string;
       explainability?: string;
       pythonLibraries?: Record<string, boolean>;
     };

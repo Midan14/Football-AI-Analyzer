@@ -13,20 +13,33 @@ const args = process.argv.slice(2);
 const leagueId = args.find((a) => a.startsWith("--league="))?.split("=")[1] ?? "";
 const season = args.find((a) => a.startsWith("--season="))?.split("=")[1] ?? "2023-2024";
 const limit = Number(args.find((a) => a.startsWith("--limit="))?.split("=")[1] ?? "100");
+const daysBack = Number(args.find((a) => a.startsWith("--days-back="))?.split("=")[1] ?? "0");
 const provider = getDataProvider();
 
-async function main() {
-  const today = new Date();
-  const dateStr = today.toISOString().slice(0, 10);
-  console.log(`[Extractor] League ${leagueId} · Season ${season} · Limit ${limit} · Date ${dateStr}`);
+function isoDateDaysAgo(daysAgo: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - daysAgo);
+  return date.toISOString().slice(0, 10);
+}
 
-  const fixtures = await provider.getFixtures({ leagueId, date: dateStr });
-  const selected = fixtures.slice(0, limit);
+export function extractionDates(days: number): string[] {
+  const total = Math.max(0, Math.floor(days));
+  return Array.from({ length: total + 1 }, (_, index) => isoDateDaysAgo(index));
+}
+
+async function main() {
+  const dates = extractionDates(daysBack);
+  console.log(`[Extractor] League ${leagueId} · Season ${season} · Limit ${limit} · DaysBack ${daysBack}`);
 
   let inserted = 0;
   let skipped = 0;
 
-  for (const f of selected) {
+  for (const dateStr of dates) {
+    if (inserted >= limit) break;
+    const fixtures = await provider.getFixtures({ leagueId, date: dateStr });
+    const selected = fixtures.slice(0, Math.max(0, limit - inserted));
+
+    for (const f of selected) {
     try {
       const full = await provider.getMatch(f.id);
       if (!full.result) { skipped++; continue; }
@@ -114,6 +127,7 @@ async function main() {
       process.stdout.write(`\rInserted ${inserted} · Skipped ${skipped}`);
     } catch (err) {
       skipped++;
+    }
     }
   }
 

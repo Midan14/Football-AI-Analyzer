@@ -3,14 +3,11 @@
 import { Star, Zap } from "lucide-react";
 import type { FixtureEdgeHint } from "@/frontend/hooks/use-fixture-edge-hints";
 import type { Fixture } from "@/shared/domain";
+import { formatKickoffTimeColombia } from "@/frontend/lib/date-utils";
+import { fixtureStatusLabelEs } from "@/shared/fixture-status";
 
 function formatKickoffTime(kickoff: string): string {
-  return new Date(kickoff).toLocaleTimeString("es-CO", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: "America/Bogota",
-  });
+  return formatKickoffTimeColombia(kickoff).replace(" COT", "");
 }
 
 type LeagueFixturePreviewRowProps = {
@@ -27,6 +24,14 @@ export function LeagueFixturePreviewRow({ fixture, edgeHint, onClick }: LeagueFi
           <span className="lcv-fx-live">{fixture.elapsed ?? "?"}′</span>
         ) : fixture.status === "final" ? (
           <span className="lcv-fx-final">FT</span>
+        ) : fixture.status === "postponed" ? (
+          <span className="lcv-fx-postponed" title={fixture.statusLong}>
+            {fixtureStatusLabelEs("postponed", fixture.statusLong).slice(0, 4).toUpperCase()}
+          </span>
+        ) : fixture.status === "cancelled" ? (
+          <span className="lcv-fx-cancelled" title={fixture.statusLong}>
+            {fixtureStatusLabelEs("cancelled", fixture.statusLong).slice(0, 4).toUpperCase()}
+          </span>
         ) : (
           <span>{formatKickoffTime(fixture.kickoff)}</span>
         )}

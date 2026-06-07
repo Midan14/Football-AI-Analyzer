@@ -31,7 +31,7 @@ function hasPythonSources(
 ): boolean {
   if (!sources || typeof sources !== "object") return false;
   const s = sources as Record<string, string | Record<string, boolean> | undefined>;
-  const keys = ["timeSeries", "bivariatePoisson", "temporalBlend", "mlOps", "causalSurvival", "quantumOptimizer", "halfTime", "cornersEsp"];
+  const keys = ["timeSeries", "bivariatePoisson", "temporalBlend", "mlOps", "causalSurvival", "quantumOptimizer", "halfTime", "cornersEsp", "multiMarket"];
   return keys.some((k) => {
     const v = s[k];
     return typeof v === "string" && v.length > 0 && !v.includes("typescript") && !v.includes("fallback");
@@ -46,7 +46,8 @@ export function buildAnalysisPipelineStatus(input: BuildInput): AnalysisPipeline
     input.extendedMerged ?? hasPythonSources(input.analysis.advancedModels?.modelSources);
   const hasMl = Boolean(input.mlPrediction?.probabilities?.ensemble);
   const mlHeuristic = modelsUsed.some((m) => m.includes("heuristic"));
-  const mlTrained = hasMl && modelsUsed.length > 0 && !mlHeuristic;
+  const mlHybrid = input.mlPrediction?.source === "hybrid";
+  const mlTrained = (hasMl && modelsUsed.length > 0 && !mlHeuristic) || mlHybrid;
 
   if (extendedMerged) layers.push("python");
   if (hasMl) layers.push("ml");
@@ -57,7 +58,11 @@ export function buildAnalysisPipelineStatus(input: BuildInput): AnalysisPipeline
   let label = "Motor: TS";
   let detail = "Análisis estadístico en TypeScript (Poisson, ensemble, Kelly, modelos avanzados locales).";
 
-  if (layers.length === 3 && mlTrained) {
+  if (mlHybrid) {
+    tier = "max";
+    label = "Motor: Híbrido DC→XGB";
+    detail = `Dixon-Coles (λ/μ) + XGBoost contextual → mercados unificados (${modelsUsed.join(", ")}).`;
+  } else if (layers.length === 3 && mlTrained) {
     tier = "max";
     label = "Motor: TS + Python + ML";
     detail = `Mezcla ponderada TS + modelos extendidos (Prophet/ARIMA/SARIMA, etc.) + ML entrenado (${modelsUsed.join(", ")}).`;

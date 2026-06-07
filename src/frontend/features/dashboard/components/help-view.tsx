@@ -2,8 +2,11 @@
 
 import { useState } from "react";
 import { BookOpen, Globe2, Brain, Bell, Star, FileText, BarChart3, Zap, Target, Activity, TrendingUp, Settings, HelpCircle } from "lucide-react";
+import { CONFIDENCE_THRESHOLDS } from "@/frontend/lib/confidence-display";
 
 type FAQItem = { q: string; a: string };
+
+const confidenceDecisionCopy = `APOSTAR (≥${CONFIDENCE_THRESHOLDS.bet}%): el modelo tiene suficiente certeza. PRECAUCIÓN (${CONFIDENCE_THRESHOLDS.caution}-${CONFIDENCE_THRESHOLDS.bet - 1}%): hay valor pero con riesgo. NO APOSTAR (<${CONFIDENCE_THRESHOLDS.caution}%): datos insuficientes o riesgo alto.`;
 
 const faqs: FAQItem[] = [
   { q: "¿Cómo selecciono un partido?", a: "Usa los selectores en la barra superior: País → Liga → Fecha → Partido. También puedes buscar un equipo directamente con el buscador o navegar desde el Calendario." },
@@ -12,9 +15,9 @@ const faqs: FAQItem[] = [
   { q: "¿Qué es Kelly Criterion?", a: "Es una fórmula matemática que calcula el stake óptimo basado en tu edge y bankroll. Usamos Kelly Fraccional (25%) para ser conservadores. Nunca recomienda más del 1% del bankroll en un solo mercado." },
   { q: "¿Por qué la confianza es baja para algunas ligas?", a: "La confianza se penaliza cuando faltan datos: sin cuotas reales (-8pts), sin alineaciones (-5pts), sin xG (-4pts), liga de baja cobertura (-15pts). Ligas elite tienen más datos = mayor confianza. Revisa las penalizaciones en el panel de cada partido." },
   { q: "¿Los datos son en tiempo real?", a: "En Partidos en Vivo la lista se actualiza cada 10 segundos. En el tablero del día, los marcadores en vivo se refrescan cada 15 segundos cuando estás en vistas que muestran el calendario. Los partidos programados se recargan cada ~30–60 segundos. Las cuotas se cargan en segundo plano tras los fixtures. En modo demo se usan datos de referencia." },
-  { q: "¿Cómo agrego equipos favoritos?", a: "Haz clic en la ⭐ junto al nombre de un equipo en el Match Center o Partidos en Vivo. Los equipos favoritos aparecen en la Watchlist y activan alertas sonoras para goles." },
+  { q: "¿Cómo agrego equipos favoritos?", a: "Haz clic en la ⭐ junto al nombre de un equipo en el Match Center o Partidos en Vivo. Los equipos favoritos aparecen en Favoritos (Watchlist) y activan alertas sonoras para goles." },
   { q: "¿Puedo exportar el análisis?", a: "Sí. Desde la vista Informes o Modelos AI puedes exportar un PDF completo con todas las probabilidades, recomendaciones, Kelly y tabla de valor." },
-  { q: "¿Qué significa APOSTAR/PRECAUCIÓN/NO APOSTAR?", a: "APOSTAR (≥68% confianza): el modelo tiene suficiente certeza. PRECAUCIÓN (52-67%): hay valor pero con riesgo. NO APOSTAR (<52%): datos insuficientes o riesgo alto." },
+  { q: "¿Qué significa APOSTAR/PRECAUCIÓN/NO APOSTAR?", a: confidenceDecisionCopy },
   { q: "¿Cómo se resuelven las predicciones?", a: "Ve a Mis Predicciones y haz clic en Resolver predicciones finalizadas. El sistema consulta el resultado real del partido y cierra automáticamente el pick con WON/LOST/VOID y el ROI correspondiente. También puedes importar resultados via CSV." },
 ];
 
@@ -29,7 +32,7 @@ const guides = [
   { icon: FileText, title: "Historial de Análisis", desc: "Todos los análisis ejecutados guardados en la base de datos. Re-analiza partidos pasados." },
   { icon: TrendingUp, title: "Mis Predicciones", desc: "Tracking de apuestas: win rate, profit, ROI. Importa resultados via CSV." },
   { icon: Bell, title: "Alertas", desc: "Centro de riesgo: escanea todos los partidos del día y detecta valor, riesgos y eventos en vivo." },
-  { icon: Star, title: "Watchlist", desc: "Partidos de tus equipos favoritos con cuotas y estado en vivo." },
+  { icon: Star, title: "Favoritos (Watchlist)", desc: "Partidos de tus equipos favoritos con cuotas y estado en vivo." },
   { icon: FileText, title: "Informes", desc: "Informe pre-partido profesional exportable a PDF con toda la información del análisis." },
   { icon: Settings, title: "Configuración", desc: "Modo del modelo, bankroll, proveedor de datos, perfil de cuenta y cache." },
 ];
@@ -121,13 +124,13 @@ export function HelpView() {
         <h3><Settings size={16} /> Información Técnica</h3>
         <div className="help-tech">
           <div><span>Framework</span><b>Next.js 16 + React 19</b></div>
-          <div><span>Proveedor</span><b>API-Football Pro (7500 req/día)</b></div>
+          <div><span>Proveedor</span><b>API-Football (según plan activo)</b></div>
           <div><span>Base de datos</span><b>PostgreSQL + Prisma ORM</b></div>
           <div><span>Cache</span><b>Redis (TTL dinámico 15-60s)</b></div>
           <div><span>Auth</span><b>NextAuth.js v4</b></div>
-          <div><span>Actualización live</span><b>Polling 15s (vivo) / 60s (pre)</b></div>
+          <div><span>Actualización live</span><b>Polling 10s (vivo) / 15-60s (según vista)</b></div>
           <div><span>Modelos</span><b>16 activos (TypeScript nativo)</b></div>
-          <div><span>Staking</span><b>Kelly Fraccional 35%</b></div>
+          <div><span>Staking</span><b>Kelly fraccional conservador (25%)</b></div>
         </div>
       </div>
 

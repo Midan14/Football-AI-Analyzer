@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Country, Fixture, League } from "@/shared/domain";
 import { usePagination } from "@/frontend/hooks/use-pagination";
 import { useLocalStorage } from "@/frontend/hooks/use-local-storage";
+import { FAVORITE_TEAM_IDS_KEY } from "@/frontend/lib/favorite-team-storage";
 import { useMonthFixtureCounts } from "@/frontend/hooks/use-month-fixture-counts";
 import { useCalendarUpcoming } from "@/frontend/hooks/use-calendar-upcoming";
 import { useFixtureEdgeHints } from "@/frontend/hooks/use-fixture-edge-hints";
@@ -47,7 +48,9 @@ const MONTH_NAMES = [
 const STATUS_ORDER: Record<Fixture["status"], number> = {
   live: 0,
   "pre-match": 1,
-  final: 2,
+  postponed: 2,
+  cancelled: 3,
+  final: 4,
 };
 
 function sortFixtures(list: Fixture[]): Fixture[] {
@@ -117,7 +120,7 @@ export function CalendarView({
   const [statusFilter, setStatusFilter] = useState<"all" | Fixture["status"]>("all");
   const [calendarQuery, setCalendarQuery] = useState("");
   const [leagueFilter, setLeagueFilter] = useState<string>("all");
-  const [favoriteTeams] = useLocalStorage<string[]>("live-sound-favorite-teams", []);
+  const [favoriteTeams] = useLocalStorage<string[]>(FAVORITE_TEAM_IDS_KEY, []);
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [viewMode, setViewMode] = useState<"day" | "upcoming">("day");
   const [upcomingDayCount, setUpcomingDayCount] = useState(7);
@@ -241,7 +244,9 @@ export function CalendarView({
 
   return (
     <section className="view-workspace cal-view">
-      {(fixturesDataSource === "api-football-quota" || fixturesDataSource === "demo-fallback") && (
+      {(fixturesDataSource === "api-football-quota" ||
+        fixturesDataSource === "api-football-rate-limit" ||
+        fixturesDataSource === "demo-fallback") && (
         <DataStatusBanner fixturesDataSource={fixturesDataSource} onRefresh={onRefresh} />
       )}
 
@@ -278,7 +283,7 @@ export function CalendarView({
           <Download size={14} /> CSV
         </button>
         <button type="button" className="cal-export" onClick={handleShareLink} disabled={shareBusy} title="Copiar enlace">
-          <Link2 size={14} /> {shareBusy ? "..." : "Compartir"}
+          <Link2 size={14} /> {shareBusy ? "Copiando..." : "Compartir"}
         </button>
         <label className="cal-date-picker" title="Ir a fecha">
           <input

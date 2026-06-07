@@ -72,8 +72,8 @@ describe("analyzeFixture", () => {
     });
 
     expect(result.valueTable.length).toBeGreaterThanOrEqual(6);
-    expect(result.recommendation.market).toBeTruthy();
-    expect(result.recommendation.fairOdds).toBeGreaterThan(0);
+    expect(result.recommendation.market).toBe("Sin valor claro");
+    expect(result.recommendation.fairOdds).toBe(0);
     expect(result.recommendation.stakeUnits).toBe(0);
     expect(result.kelly?.bets ?? []).toHaveLength(0);
   });

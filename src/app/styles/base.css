@@ -168,6 +168,100 @@ button:hover {
   background-clip: text;
 }
 
+.brand-home-btn {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background .18s ease, transform .12s ease;
+}
+
+.brand-home-btn:hover {
+  background: rgba(52, 211, 153, .06);
+}
+
+.brand-home-btn:active {
+  transform: scale(.985);
+}
+
+.brand-home-btn.active {
+  box-shadow: inset 3px 0 0 #34d399;
+}
+
+.brand-home-btn.busy .brand-shield {
+  animation: brandShieldPulse .7s ease-in-out;
+}
+
+@keyframes brandShieldPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 4px rgba(52, 211, 153, .08), 0 16px 36px rgba(52, 211, 153, .2); }
+  50% { transform: scale(1.06); box-shadow: 0 0 0 8px rgba(52, 211, 153, .16), 0 18px 40px rgba(52, 211, 153, .28); }
+}
+
+.app-boot-splash {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(52, 211, 153, .12), transparent 45%),
+    var(--bg, #0b1220);
+}
+
+.app-boot-shield {
+  width: 72px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 35% 25%, rgba(255, 255, 255, .3), transparent 38%),
+    linear-gradient(145deg, #34d399, #059669 55%, #064e3b);
+  border: 1px solid rgba(52, 211, 153, .5);
+  box-shadow: 0 0 0 6px rgba(52, 211, 153, .08), 0 20px 44px rgba(52, 211, 153, .22);
+  font-size: 34px;
+  animation: brandShieldPulse 1.4s ease-in-out infinite;
+}
+
+.app-boot-title {
+  font-size: clamp(20px, 2.5vw, 28px);
+  background: linear-gradient(135deg, #f0f6f2, #34d399);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.app-boot-message {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text, #e5e7eb);
+  font-weight: 600;
+}
+
+.app-boot-sub {
+  font-size: 12px;
+  color: var(--muted, #94a3b8);
+}
+
+.app-boot-spinner {
+  width: 28px;
+  height: 28px;
+  margin-top: 8px;
+  border-radius: 50%;
+  border: 3px solid rgba(52, 211, 153, .18);
+  border-top-color: #34d399;
+  animation: appBootSpin .8s linear infinite;
+}
+
+@keyframes appBootSpin {
+  to { transform: rotate(360deg); }
+}
+
 .nav {
   display: grid;
   gap: 8px;

@@ -7,12 +7,21 @@ let audioCtx: AudioContext | null = null;
 
 function getAudioContext(): AudioContext {
   if (!audioCtx) {
-    audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
   }
   if (audioCtx.state === "suspended") {
-    audioCtx.resume();
+    void audioCtx.resume();
   }
   return audioCtx;
+}
+
+/** Call after user gesture so autoplay policies allow match alerts. */
+export function unlockAudioContext(): void {
+  try {
+    getAudioContext();
+  } catch {
+    // Audio not available
+  }
 }
 
 function playTone(frequency: number, duration: number, type: OscillatorType = "sine", volume = 0.3) {
@@ -43,6 +52,19 @@ function playTone(frequency: number, duration: number, type: OscillatorType = "s
 export function playGoalSound() {
   const ctx = getAudioContext();
   const now = ctx.currentTime;
+
+  // Stadium horn hit
+  const horn = ctx.createOscillator();
+  const hornGain = ctx.createGain();
+  horn.type = "square";
+  horn.frequency.setValueAtTime(220, now);
+  horn.frequency.exponentialRampToValueAtTime(440, now + 0.18);
+  hornGain.gain.setValueAtTime(0.08, now);
+  hornGain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+  horn.connect(hornGain);
+  hornGain.connect(ctx.destination);
+  horn.start(now);
+  horn.stop(now + 0.35);
 
   // Chord burst (C major)
   [523, 659, 784].forEach((freq, i) => {
@@ -146,6 +168,13 @@ export function playFoulSound() {
   playTone(440, 0.1, "triangle", 0.1);
 }
 
+/** 📺 VAR review alert */
+export function playVarSound() {
+  playTone(740, 0.12, "sine", 0.18);
+  setTimeout(() => playTone(620, 0.12, "sine", 0.16), 120);
+  setTimeout(() => playTone(740, 0.18, "sine", 0.14), 240);
+}
+
 /**
  * Play sound based on event type
  */
@@ -153,17 +182,19 @@ export function playEventSound(eventType: string, detail: string = "") {
   const type = eventType.toLowerCase();
   const det = detail.toLowerCase();
 
-  if (type === "goal" || type.includes("goal")) {
+  if (type === "goal" || (det.includes("goal") && !det.includes("cancelled"))) {
     playGoalSound();
+  } else if (type === "var" || det.includes("var")) {
+    playVarSound();
   } else if (type === "card" && det.includes("red")) {
     playRedCardSound();
-  } else if (type === "card" || type.includes("yellow")) {
+  } else if (type === "card" || det.includes("yellow")) {
     playCardSound();
-  } else if (type.includes("penalty") || det.includes("penalty")) {
+  } else if (det.includes("penalty") && !det.includes("missed") && type !== "goal") {
     playPenaltySound();
-  } else if (type === "subst" || type.includes("substitution")) {
+  } else if (type === "subst" || det.includes("substitution")) {
     playSubstitutionSound();
-  } else if (type.includes("foul")) {
+  } else if (det.includes("foul")) {
     playFoulSound();
   }
 }

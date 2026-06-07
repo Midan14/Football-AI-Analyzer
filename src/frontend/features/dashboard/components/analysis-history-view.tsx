@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { History, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { CONFIDENCE_THRESHOLDS } from "@/shared/confidence-thresholds";
 
 type AnalysisRecord = {
   id: string;
@@ -99,8 +100,8 @@ export function AnalysisHistoryView({ addToast, onOpenFixture }: AnalysisHistory
   };
 
   function confidenceColor(score: number) {
-    if (score >= 70) return "#4ade80";
-    if (score >= 55) return "#facc15";
+    if (score >= CONFIDENCE_THRESHOLDS.bet) return "#4ade80";
+    if (score >= CONFIDENCE_THRESHOLDS.caution) return "#facc15";
     return "#f87171";
   }
 

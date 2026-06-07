@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -25,9 +25,10 @@ import { useLiveDetail, useLiveFixtures } from "@/frontend/hooks/use-live";
 import { useFixtureEdgeHints } from "@/frontend/hooks/use-fixture-edge-hints";
 import { useFixtures } from "@/frontend/hooks/use-fixtures";
 import { useLocalStorage } from "@/frontend/hooks/use-local-storage";
-import { playEventSound } from "@/frontend/lib/sounds";
+import { FAVORITE_TEAM_IDS_KEY, LIVE_SOUND_ENABLED_KEY } from "@/frontend/lib/favorite-team-storage";
 import { todayIsoDateColombia } from "@/frontend/lib/date-utils";
 import { parseCalendarUrlState } from "@/frontend/lib/calendar-export";
+import { unlockAudioContext } from "@/frontend/lib/sounds";
 import {
   buildLiveShareUrl,
   filterLiveFixtures,
@@ -80,7 +81,10 @@ export function LiveMatchesView({
     dataUpdatedAt,
     refetch,
   } = useLiveFixtures({
-    enabled: isActive && fixturesDataSource !== "api-football-quota",
+    enabled:
+      isActive &&
+      fixturesDataSource !== "api-football-quota" &&
+      fixturesDataSource !== "api-football-rate-limit",
     aggressive: isActive,
   });
 
@@ -89,10 +93,10 @@ export function LiveMatchesView({
 
   const [selectedLiveId, setSelectedLiveId] = useState<string | undefined>(initialFixtureId);
   const [mobileStep, setMobileStep] = useState<MobileStep>("list");
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useLocalStorage<boolean>(LIVE_SOUND_ENABLED_KEY, true);
   const [collapsedLeagues, setCollapsedLeagues] = useState<Record<string, boolean>>({});
   const [shareCopied, setShareCopied] = useState(false);
-  const [favoriteTeams, setFavoriteTeams] = useLocalStorage<string[]>("live-sound-favorite-teams", []);
+  const [favoriteTeams, setFavoriteTeams] = useLocalStorage<string[]>(FAVORITE_TEAM_IDS_KEY, []);
   const [filters, setFilters] = useState<LiveFilterState>({
     countryId: "",
     leagueId: "",
@@ -124,9 +128,6 @@ export function LiveMatchesView({
     selectedLiveId,
     { enabled: isActive && Boolean(selectedLiveId) }
   );
-
-  const prevEventsRef = useRef<Map<string, number>>(new Map());
-  const prevDetailEventsRef = useRef<number>(0);
 
   const countryLeagues = useMemo(() => {
     if (!filters.countryId) return allLeagues;
@@ -184,32 +185,6 @@ export function LiveMatchesView({
     });
   }, [isActive, selectedDate, selectedLiveId, filters.countryId, filters.leagueId]);
 
-  useEffect(() => {
-    if (!soundEnabled || favoriteTeams.length === 0) return;
-    for (const fixture of liveFixtures) {
-      if (!isMatchFavorite(fixture)) continue;
-      const currentGoals = (fixture.result?.homeGoals ?? 0) + (fixture.result?.awayGoals ?? 0);
-      const prevGoals = prevEventsRef.current.get(fixture.id) ?? 0;
-      if (currentGoals > prevGoals && prevGoals > 0) {
-        playEventSound("Goal", "");
-      }
-      prevEventsRef.current.set(fixture.id, currentGoals);
-    }
-  }, [liveFixtures, soundEnabled, favoriteTeams, isMatchFavorite]);
-
-  useEffect(() => {
-    if (!liveDetail || !soundEnabled || !selectedLiveId) return;
-    if (!isMatchFavorite(liveDetail.fixture)) return;
-    const currentCount = liveDetail.events.length;
-    if (currentCount > prevDetailEventsRef.current && prevDetailEventsRef.current > 0) {
-      const newEvents = liveDetail.events.slice(prevDetailEventsRef.current);
-      for (const event of newEvents) {
-        playEventSound(event.type, event.detail);
-      }
-    }
-    prevDetailEventsRef.current = currentCount;
-  }, [liveDetail, soundEnabled, selectedLiveId, isMatchFavorite]);
-
   const updatedLabel = dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString("es-CO", {
         hour: "2-digit",
@@ -227,11 +202,17 @@ export function LiveMatchesView({
       countryId: filters.countryId || undefined,
       leagueId: filters.leagueId || undefined,
     });
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(url);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        window.prompt("Copia este enlace", url);
+      }
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 1800);
+    } catch {
+      window.prompt("Copia este enlace", url);
     }
-    setShareCopied(true);
-    setTimeout(() => setShareCopied(false), 1800);
   };
 
   const selectMatch = (fixtureId: string) => {
@@ -245,7 +226,9 @@ export function LiveMatchesView({
 
   return (
     <section className="view-workspace live-view">
-      {fixturesDataSource === "api-football-quota" && (
+      {(fixturesDataSource === "api-football-quota" ||
+        fixturesDataSource === "api-football-rate-limit" ||
+        fixturesDataSource === "demo-fallback") && (
         <DataStatusBanner fixturesDataSource={fixturesDataSource} />
       )}
 
@@ -271,7 +254,14 @@ export function LiveMatchesView({
           </p>
         </div>
         <div className="live-hero-actions">
-          <button type="button" className={`live-sound-btn ${soundEnabled ? "on" : ""}`} onClick={() => setSoundEnabled(!soundEnabled)}>
+          <button
+            type="button"
+            className={`live-sound-btn ${soundEnabled ? "on" : ""}`}
+            onClick={() => {
+              unlockAudioContext();
+              setSoundEnabled(!soundEnabled);
+            }}
+          >
             {soundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
             {soundEnabled ? "Sonido ON" : "Sonido OFF"}
           </button>
@@ -433,6 +423,16 @@ export function LiveMatchesView({
                             <button
                               type="button"
                               className={`live-fav-btn ${favoriteTeams.includes(fixture.home.id) ? "active" : ""}`}
+                              title={
+                                favoriteTeams.includes(fixture.home.id)
+                                  ? `Quitar ${fixture.home.name} de favoritos`
+                                  : `Añadir ${fixture.home.name} a favoritos`
+                              }
+                              aria-label={
+                                favoriteTeams.includes(fixture.home.id)
+                                  ? `Quitar ${fixture.home.name} de favoritos`
+                                  : `Añadir ${fixture.home.name} a favoritos`
+                              }
                               onClick={(event) => {
                                 event.stopPropagation();
                                 toggleFavoriteTeam(fixture.home.id);
@@ -448,6 +448,16 @@ export function LiveMatchesView({
                             <button
                               type="button"
                               className={`live-fav-btn ${favoriteTeams.includes(fixture.away.id) ? "active" : ""}`}
+                              title={
+                                favoriteTeams.includes(fixture.away.id)
+                                  ? `Quitar ${fixture.away.name} de favoritos`
+                                  : `Añadir ${fixture.away.name} a favoritos`
+                              }
+                              aria-label={
+                                favoriteTeams.includes(fixture.away.id)
+                                  ? `Quitar ${fixture.away.name} de favoritos`
+                                  : `Añadir ${fixture.away.name} a favoritos`
+                              }
                               onClick={(event) => {
                                 event.stopPropagation();
                                 toggleFavoriteTeam(fixture.away.id);

@@ -16,9 +16,12 @@ import type { Country, Fixture } from "@/shared/domain";
 import { useDashboardSummary, type FixtureInsight } from "@/frontend/hooks/use-dashboard-summary";
 import {
   formatDateChipLabel,
+  formatKickoffColombia,
   shiftIsoDateColombia,
   todayIsoDateColombia,
 } from "@/frontend/lib/date-utils";
+import { fixtureStatusLabelEs } from "@/shared/fixture-status";
+import { CONFIDENCE_THRESHOLDS } from "@/shared/confidence-thresholds";
 import { FixturesBoard } from "./fixtures-board";
 import { DataStatusBanner } from "./data-status-banner";
 
@@ -73,8 +76,10 @@ export function GlobalDashboardView({
     const scheduled = fixtures.filter((f) => f.status === "pre-match").length;
     const withOdds = fixtures.filter((f) => f.market.homeWinOdds > 0).length;
     const watchlistToday = fixtures.filter((f) => starred.has(f.id)).length;
-    const valueSignals = fixtures.filter((f) => (insightMap.get(f.id)?.topEdge ?? 0) >= 3).length;
-    const highConfidence = fixtures.filter((f) => (insightMap.get(f.id)?.confidence ?? 0) >= 72).length;
+    const valueSignals = fixtures.filter((f) => (insightMap.get(f.id)?.topEdge ?? 0) >= 5).length;
+    const highConfidence = fixtures.filter(
+      (f) => (insightMap.get(f.id)?.confidence ?? 0) >= CONFIDENCE_THRESHOLDS.bet
+    ).length;
 
     return {
       total: fixtures.length,
@@ -92,7 +97,8 @@ export function GlobalDashboardView({
     const byId = new Map(fixtures.map((f) => [f.id, f]));
     return (summary?.topPicks ?? [])
       .map((pick) => ({ pick, fixture: byId.get(pick.fixtureId) }))
-      .filter((row): row is { pick: FixtureInsight; fixture: Fixture } => Boolean(row.fixture));
+      .filter((row): row is { pick: FixtureInsight; fixture: Fixture } => Boolean(row.fixture))
+      .filter(({ fixture }) => fixture.status === "pre-match" || fixture.status === "live");
   }, [fixtures, summary?.topPicks]);
 
   const dateChips = useMemo(() => {
@@ -144,20 +150,22 @@ export function GlobalDashboardView({
           </div>
           <div className="dg-kpi">
             <strong>{stats.watchlistToday}</strong>
-            <span>Watchlist</span>
+            <span>Favoritos</span>
           </div>
           <div className="dg-kpi accent">
-            <strong>{stats.valueSignals}</strong>
-            <span>Con value</span>
+            <strong>{summaryLoading || summaryFetching ? "…" : stats.valueSignals}</strong>
+            <span>{summaryLoading || summaryFetching ? "Escaneando value" : "Con value"}</span>
           </div>
           <div className="dg-kpi gold">
-            <strong>{stats.highConfidence}</strong>
-            <span>Alta conf.</span>
+            <strong>{summaryLoading || summaryFetching ? "…" : stats.highConfidence}</strong>
+            <span>{summaryLoading || summaryFetching ? "Escaneando AI" : "Alta conf."}</span>
           </div>
         </div>
       </article>
 
-      {fixturesDataSource === "api-football-quota" ? (
+      {fixturesDataSource === "api-football-quota" ||
+      fixturesDataSource === "api-football-rate-limit" ||
+      fixturesDataSource === "demo-fallback" ? (
         <DataStatusBanner fixturesDataSource={fixturesDataSource} />
       ) : null}
 
@@ -173,7 +181,7 @@ export function GlobalDashboardView({
           {stats.live > 0 && <span className="dg-shortcut-badge">{stats.live}</span>}
         </button>
         <button type="button" className="dg-shortcut" onClick={() => onNavigate("Watchlist")}>
-          <Star size={16} /> Watchlist
+          <Star size={16} /> Favoritos
         </button>
         <button type="button" className="dg-shortcut" onClick={() => onNavigate("Match Center")}>
           <Target size={16} /> Match Center
@@ -202,7 +210,7 @@ export function GlobalDashboardView({
         <article className="dg-top-picks">
           <div className="dg-top-picks-head">
             <h3>Top picks del día</h3>
-            <span>Priorizados por confianza del modelo y edge detectado</span>
+            <span>Solo partidos por jugar o en curso · priorizados por confianza y edge</span>
           </div>
           <div className="dg-top-picks-grid">
             {topPickFixtures.map(({ pick, fixture }) => (
@@ -220,6 +228,12 @@ export function GlobalDashboardView({
                   {fixture.home.name} vs {fixture.away.name}
                 </strong>
                 <span className="dg-pick-league">{fixture.leagueName}</span>
+                <span className="dg-pick-time">{formatKickoffColombia(fixture.kickoff).label}</span>
+                <span className={`dg-pick-status dg-pick-status-${fixture.status}`}>
+                  {fixture.status === "live"
+                    ? `En vivo${fixture.elapsed != null ? ` · ${fixture.elapsed}'` : ""}`
+                    : fixtureStatusLabelEs(fixture.status, fixture.statusLong)}
+                </span>
                 <div className="dg-pick-footer">
                   <span>{pick.market}</span>
                   {pick.topEdge > 0 && <span className="dg-pick-edge">+{pick.topEdge.toFixed(1)}% edge</span>}

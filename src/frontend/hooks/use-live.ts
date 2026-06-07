@@ -29,13 +29,13 @@ type LiveFixturesPayload = {
   provider: string;
 };
 
-async function fetchLiveFixtures(): Promise<LiveFixturesPayload> {
+export async function fetchLiveFixtures(): Promise<LiveFixturesPayload> {
   const res = await fetch("/api/live");
   if (!res.ok) throw new Error("Error fetching live fixtures");
   return unwrapApiData<LiveFixturesPayload>(await res.json());
 }
 
-async function fetchLiveDetail(fixtureId: string): Promise<LiveMatchDetail> {
+export async function fetchLiveDetail(fixtureId: string): Promise<LiveMatchDetail> {
   const res = await fetch(`/api/live?id=${encodeURIComponent(fixtureId)}`);
   if (!res.ok) throw new Error("Error fetching live detail");
   return unwrapApiData<LiveMatchDetail>(await res.json());

@@ -7,6 +7,10 @@ import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { join } from "path";
 import type { Fixture } from "@/shared/domain";
+import { ensureMLServiceRunning, pingMLServiceHealth } from "@/backend/lib/ml/ml-service-manager";
+import { buildHybridRequestPayload, buildMLStatsPayload } from "@/backend/lib/ml/hybrid-payload";
+
+export { buildMLStatsPayload };
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 const ML_TIMEOUT = 8000;
@@ -33,7 +37,20 @@ export type MLPrediction = {
     top_features: Array<{ feature: string; impact: number }>;
     error?: string;
   };
-  source?: "fastapi" | "local-script";
+  source?: "fastapi" | "local-script" | "hybrid";
+};
+
+export type HybridMLPrediction = MLPrediction & {
+  pipeline: string;
+  hybridReady: boolean;
+  qualityGatePassed: boolean;
+  dixonColes: {
+    lambda_local: number;
+    mu_visitante: number;
+    rho: number;
+    expected_total_goals: number;
+  };
+  markets: Record<string, unknown>;
 };
 
 type LocalPredictResponse = {
@@ -96,19 +113,16 @@ function mapLocalResponse(data: LocalPredictResponse): MLPrediction | null {
   };
 }
 
+export function resetMLHealthCache() {
+  mlAvailable = null;
+  lastHealthCheck = 0;
+}
+
 async function checkMLHealth(): Promise<boolean> {
   const now = Date.now();
   if (mlAvailable !== null && now - lastHealthCheck < 30000) return mlAvailable;
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(`${ML_SERVICE_URL}/health`, { signal: controller.signal });
-    clearTimeout(timeout);
-    mlAvailable = res.ok;
-  } catch {
-    mlAvailable = false;
-  }
+  mlAvailable = await pingMLServiceHealth();
   lastHealthCheck = now;
   return mlAvailable;
 }
@@ -174,44 +188,77 @@ async function predictWithLocalScript(fixture: Fixture): Promise<MLPrediction | 
 
 /**
  * Build team stats payload from Fixture data for the ML service.
+ * @deprecated Import from hybrid-payload — kept for re-export compatibility.
  */
-export function buildMLStatsPayload(fixture: Fixture) {
-  const homeMP = fixture.home.matchesPlayed || 18;
-  const awayMP = fixture.away.matchesPlayed || 18;
+// buildMLStatsPayload lives in hybrid-payload.ts
 
-  const homeStats = {
-    fixtures: {
-      played: { total: homeMP, home: Math.ceil(homeMP / 2) },
-      wins: { total: Math.round(fixture.home.pointsTotal / 3 * 0.8), home: Math.round(fixture.home.pointsTotal / 3 * 0.5) },
-      draws: { total: Math.round((homeMP - fixture.home.pointsTotal / 3) * 0.4) },
-    },
-    goals: {
-      for: { total: { total: fixture.home.goalsFor } },
-      against: { total: { total: fixture.home.goalsAgainst } },
-    },
-    form: fixture.home.form.join(""),
-    clean_sheet: { total: Math.round(homeMP * 0.3) },
-    failed_to_score: { total: Math.round(homeMP * 0.2) },
-    penalty: { scored: { total: Math.round(homeMP * 0.05) } },
-  };
+async function predictWithHybridFastAPI(fixture: Fixture): Promise<HybridMLPrediction | null> {
+  if (!(await checkMLHealth())) return null;
 
-  const awayStats = {
-    fixtures: {
-      played: { total: awayMP, away: Math.ceil(awayMP / 2) },
-      wins: { total: Math.round(fixture.away.pointsTotal / 3 * 0.8), away: Math.round(fixture.away.pointsTotal / 3 * 0.3) },
-      draws: { total: Math.round((awayMP - fixture.away.pointsTotal / 3) * 0.4) },
-    },
-    goals: {
-      for: { total: { total: fixture.away.goalsFor } },
-      against: { total: { total: fixture.away.goalsAgainst } },
-    },
-    form: fixture.away.form.join(""),
-    clean_sheet: { total: Math.round(awayMP * 0.25) },
-    failed_to_score: { total: Math.round(awayMP * 0.25) },
-    penalty: { scored: { total: Math.round(awayMP * 0.04) } },
-  };
+  try {
+    const payload = await buildHybridRequestPayload(fixture);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ML_TIMEOUT);
 
-  return { homeStats, awayStats };
+    const res = await fetch(`${ML_SERVICE_URL}/predict/hybrid`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        home_stats: payload.homeStats,
+        away_stats: payload.awayStats,
+        fixture: payload.fixture,
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    const rawProbs = data.probabilities ?? {};
+    const ensemble = normalizeProbabilities({
+      HOME_WIN: rawProbs.HOME_WIN ?? 33.3,
+      DRAW: rawProbs.DRAW ?? 33.3,
+      AWAY_WIN: rawProbs.AWAY_WIN ?? 33.4,
+    });
+    const topClass = Object.entries(ensemble).sort((a, b) => b[1] - a[1])[0][0];
+
+    return {
+      prediction: topClass,
+      confidence: data.confidence ?? ensemble[topClass] ?? 60,
+      probabilities: { ensemble },
+      over_25: data.over_25 ?? { over: 50, under: 50 },
+      btts: data.btts ?? { yes: 50, no: 50 },
+      models_used: data.models_used ?? ["hybrid"],
+      feature_importance: data.feature_importance,
+      classes: ["HOME_WIN", "DRAW", "AWAY_WIN"],
+      shap: {
+        top_features: data.shap?.top_features ?? [],
+      },
+      source: "hybrid",
+      pipeline: data.pipeline ?? "hybrid-dc-xgb",
+      hybridReady: Boolean(data.ready),
+      qualityGatePassed: Boolean(data.quality_gate_passed),
+      dixonColes: data.dixon_coles ?? {
+        lambda_local: 1.3,
+        mu_visitante: 1.1,
+        rho: -0.03,
+        expected_total_goals: 2.4,
+      },
+      markets: data.markets ?? {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hybrid pipeline: Dixon-Coles → XGBoost → unified markets.
+ */
+export async function predictWithHybrid(fixture: Fixture): Promise<HybridMLPrediction | null> {
+  await ensureMLServiceRunning();
+  resetMLHealthCache();
+  return predictWithHybridFastAPI(fixture);
 }
 
 async function predictHeuristicFromExtended(fixture: Fixture): Promise<MLPrediction | null> {
@@ -314,11 +361,26 @@ async function predictWithFastAPI(fixture: Fixture): Promise<MLPrediction | null
 }
 
 /**
- * Get ML predictions: tries FastAPI, then local Python script with trained models.
+ * Get ML predictions. The hybrid Dixon-Coles -> XGBoost pipeline (ml-service/)
+ * is the single source of truth. The legacy FastAPI `/predict` ensemble and the
+ * deprecated local `ml/predict.py` script are kept only as display-level
+ * fallbacks and never override the Poisson core (see analysis-orchestrator).
+ *
+ * The deprecated local script is opt-in via ML_ENABLE_LEGACY_LOCAL=1 to avoid
+ * spawning a Python process on every analysis.
  */
 export async function predictWithML(fixture: Fixture): Promise<MLPrediction | null> {
+  await ensureMLServiceRunning();
+  resetMLHealthCache();
+
+  const hybrid = await predictWithHybrid(fixture);
+  if (hybrid) return hybrid;
+
   const fromApi = await predictWithFastAPI(fixture);
   if (fromApi) return fromApi;
 
-  return predictWithLocalScript(fixture);
+  if (process.env.ML_ENABLE_LEGACY_LOCAL === "1") {
+    return predictWithLocalScript(fixture);
+  }
+  return null;
 }

@@ -97,3 +97,37 @@ export function fixturesForCalendarDate<T extends { kickoff: string }>(
 ): T[] {
   return fixtures.filter((fixture) => kickoffDateColombia(fixture.kickoff) === selectedDate);
 }
+
+/** Hora en Colombia con a. m. / p. m. + sufijo COT */
+export function formatKickoffTimeColombia(kickoff: string): string {
+  const parsed = new Date(kickoff);
+  if (Number.isNaN(parsed.getTime())) return "--:--";
+  const time = parsed.toLocaleTimeString("es-CO", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: BOGOTA_TZ,
+  });
+  return `${time} COT`;
+}
+
+export function formatKickoffDateShortColombia(kickoff: string): string {
+  const parsed = new Date(kickoff);
+  if (Number.isNaN(parsed.getTime())) return kickoff.slice(0, 10);
+  return parsed.toLocaleDateString("es-CO", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: BOGOTA_TZ,
+  });
+}
+
+export function formatKickoffColombia(kickoff: string): {
+  time: string;
+  day: string;
+  label: string;
+} {
+  const time = formatKickoffTimeColombia(kickoff);
+  const day = formatKickoffDateShortColombia(kickoff);
+  return { time, day, label: `${day} · ${time}` };
+}

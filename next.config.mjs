@@ -3,10 +3,11 @@ import { withSentryConfig } from "@sentry/nextjs";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  turbopack: {
-    root: path.dirname(new URL(import.meta.url).pathname),
-  },
+  allowedDevOrigins: ["192.168.2.70"],
   outputFileTracingRoot: path.dirname(new URL(import.meta.url).pathname),
+  outputFileTracingExcludes: {
+    "*": ["./ml-service/venv/**", "ml-service/venv/**", "ml-service/mlruns/**"],
+  },
   // Image optimization
   images: {
     remotePatterns: [
