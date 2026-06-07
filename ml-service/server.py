@@ -145,6 +145,7 @@ class HybridPredictResponse(BaseModel):
     pipeline: str
     ready: bool
     quality_gate_passed: bool = False
+    backtest_gate_passed: bool = False
     dixon_coles: Dict
     probabilities: Dict[str, float]
     over_25: Dict[str, float]

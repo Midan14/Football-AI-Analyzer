@@ -37,15 +37,17 @@ import { buildExtendedStatisticalPack, sarimaExtension } from "./models/extended
 import { pickBestMarket, HEAVY_FAVORITE_MIN_EDGE, HEAVY_FAVORITE_MIN_ODDS, MIN_RECOMMENDATION_ODDS } from "./market-picker";
 import { buildTacticalRadar } from "./tactical-radar-builder";
 import { riskLevelFromConfidence } from "@/shared/confidence-thresholds";
+import type { GoalModelContextAdjustment } from "./squad-impact";
 
 type ValueRow = AnalysisResult["valueTable"][number];
 
 type AnalyzeFixtureOptions = {
   events?: MatchEvent[];
+  goalContext?: GoalModelContextAdjustment | null;
 };
 
 export function analyzeFixture(fixture: Fixture, options?: AnalyzeFixtureOptions): AnalysisResult {
-  const xg = expectedGoals(fixture);
+  const xg = expectedGoals(fixture, options?.goalContext);
   const matrix = buildAdjustedPoissonMatrix(xg, fixture);
   const probabilities = compute1X2Probabilities(matrix);
   const topExactScores = computeExactScoreProbabilities(matrix);

@@ -1,4 +1,8 @@
 import type { Fixture } from "@/shared/domain";
+import {
+  buildHeuristicContextAdjustment,
+  type GoalModelContextAdjustment,
+} from "./squad-impact";
 
 export const round1 = (value: number) => Math.round(value * 10) / 10;
 export const round2 = (value: number) => Math.round(value * 100) / 100;
@@ -50,7 +54,10 @@ export function refereeHomeBiasFactors(homeBias: number | undefined): { home: nu
   return { home: 1 + adj, away: 1 - adj };
 }
 
-export function expectedGoals(fixture: Fixture) {
+export function expectedGoals(
+  fixture: Fixture,
+  contextAdjustment?: GoalModelContextAdjustment | null
+) {
   const matches = fixture.home.matchesPlayed || 18;
   const homeAttack = fixture.coverage.hasXg ? fixture.home.xgFor / matches : fixture.home.goalsFor / matches;
   const awayDefense = fixture.coverage.hasXg ? fixture.away.xgAgainst / matches : fixture.away.goalsAgainst / matches;
@@ -60,18 +67,21 @@ export function expectedGoals(fixture: Fixture) {
   const awayMotivation = fixture.context.mustWinAway ? 0.12 : 0;
   const travelDrag = Math.min(0.18, fixture.away.travelKm / 1600);
 
-  const baseHome = (homeAttack * 0.58 + awayDefense * 0.42) + 0.18 + homeMotivation;
-  const baseAway = (awayAttack * 0.56 + homeDefense * 0.44) + awayMotivation - travelDrag;
-
-  // Squad / referee adjustments — applied multiplicatively after the base
-  // formula so that "no data" defaults to multiplier 1 (zero effect).
-  const homeKp = keyPlayerMultiplier(fixture.home.keyPlayerStatus);
-  const awayKp = keyPlayerMultiplier(fixture.away.keyPlayerStatus);
+  const squadAdj = contextAdjustment ?? buildHeuristicContextAdjustment(fixture);
   const ref = refereeHomeBiasFactors(fixture.referee?.homeBias);
 
+  const baseHome =
+    (homeAttack * 0.58 * squadAdj.homeAttackMult + awayDefense * 0.42 * squadAdj.awayDefenseLeak) +
+    0.18 +
+    homeMotivation;
+  const baseAway =
+    (awayAttack * 0.56 * squadAdj.awayAttackMult + homeDefense * 0.44 * squadAdj.homeDefenseLeak) +
+    awayMotivation -
+    travelDrag;
+
   return {
-    home: Math.max(0.35, baseHome * homeKp * ref.home),
-    away: Math.max(0.25, baseAway * awayKp * ref.away),
+    home: Math.max(0.35, baseHome * ref.home),
+    away: Math.max(0.25, baseAway * ref.away),
   };
 }
 

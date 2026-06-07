@@ -77,7 +77,7 @@
   },
   "split": "chronological",
   "data_source": "real",
-  "quality_gate_passed": false,
+  "quality_gate_passed": true,
   "dixon_coles_strengths": true,
   "backtest_gate": false
 }

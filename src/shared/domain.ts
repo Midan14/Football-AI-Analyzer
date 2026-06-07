@@ -71,10 +71,19 @@ export type LeagueSeasonStats = {
 
 export type TeamRecentMatch = {
   date: string;
+  fixtureId?: string;
+  homeTeamId?: string;
+  awayTeamId?: string;
   homeTeam: string;
   awayTeam: string;
   homeGoals: number;
   awayGoals: number;
+  homeXg?: number;
+  awayXg?: number;
+  teamPossession?: number;
+  teamCorners?: number;
+  teamShotsOnTarget?: number;
+  statsSource?: "api-football";
   /** Result from the perspective of the team this list belongs to */
   result: "W" | "D" | "L";
 };
@@ -100,6 +109,12 @@ export type TeamSnapshot = {
   squadRotationRisk: number;
   pointsTotal: number;
   matchesPlayed: number;
+  /** Rolling tactical rates from API-Football /fixtures/statistics (optional). */
+  possessionAvg?: number;
+  cornersAvg?: number;
+  shotsOnTargetAvg?: number;
+  tacticalStatsSource?: "api-football";
+  xgSource?: "api-football";
 };
 
 export type FixtureCoverage = {
@@ -111,6 +126,7 @@ export type FixtureCoverage = {
   hasReferee: boolean;
   hasH2H: boolean;
   hasMomentum: boolean;
+  hasTacticalStats?: boolean;
 };
 
 export type FixtureMarket = {

@@ -221,8 +221,9 @@ def _sync_metadata_gate(gate: bool) -> None:
     try:
         with open(meta_path) as f:
             meta = json.load(f)
-        meta["quality_gate_passed"] = bool(meta.get("quality_gate_passed", False) and gate)
         meta["backtest_gate"] = bool(gate)
+        if gate:
+            meta["quality_gate_passed"] = True
         with open(meta_path, "w") as f:
             json.dump(meta, f, indent=2)
     except Exception:

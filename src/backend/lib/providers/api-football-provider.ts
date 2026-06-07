@@ -33,6 +33,13 @@ import {
 } from "@/backend/lib/fixtures/fixture-context-enricher";
 import type { MatchEvent } from "@/shared/domain";
 import { mapApiFootballStatusShort } from "@/shared/fixture-status";
+import {
+  applyRollingMetricsToTeam,
+  enrichRecentMatchWithTeamStats,
+  parseFixtureStatisticsResponse,
+  recentMatchesHaveRealXg,
+  teamHasRealTacticalStats,
+} from "@/backend/lib/providers/api-football-statistics";
 
 const API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io";
 /** Odds prefetch is on by default; set API_FOOTBALL_PREFETCH_FIXTURE_ODDS=false to disable. */
@@ -600,17 +607,11 @@ function enrichTeamWithStats(team: TeamSnapshot, stats: ApiTeamStats, side: "hom
   const recentWins = form.filter((f) => f === "W").length;
   const motivation = Math.min(95, Math.max(45, 50 + recentWins * 9));
 
-  // xG estimate: goals * 0.92 (rough proxy when real xG not available)
-  const xgFor = Math.round(goalsFor * 0.93 * 10) / 10;
-  const xgAgainst = Math.round(goalsAgainst * 0.95 * 10) / 10;
-
   return {
     ...team,
     form,
     goalsFor,
     goalsAgainst,
-    xgFor,
-    xgAgainst,
     matchesPlayed: played,
     pointsTotal: points,
     tablePosition: Math.max(1, Math.min(20, Math.round(21 - (points / Math.max(1, played)) * 7))),
@@ -633,6 +634,9 @@ function mapRecentMatch(item: ApiFootballFixtureItem, teamId: number): TeamRecen
 
   return {
     date: item.fixture.date,
+    fixtureId: String(item.fixture.id),
+    homeTeamId: String(item.teams.home.id),
+    awayTeamId: String(item.teams.away.id),
     homeTeam: item.teams.home.name,
     awayTeam: item.teams.away.name,
     homeGoals,
@@ -776,6 +780,30 @@ export class ApiFootballProvider {
       }
     }
     return null;
+  }
+
+  private async enrichRecentMatchesWithStatistics(
+    matches: TeamRecentMatch[],
+    teamId: number
+  ): Promise<TeamRecentMatch[]> {
+    return Promise.all(
+      matches.map(async (match) => {
+        if (!match.fixtureId) return match;
+        try {
+          const rows = await this.requestSingle<
+            Array<{
+              team?: { id?: number };
+              statistics?: Array<{ type?: string; value?: string | number | null }>;
+            }>
+          >(`/fixtures/statistics?fixture=${match.fixtureId}`);
+          if (!rows || rows.length < 2) return match;
+          const sides = parseFixtureStatisticsResponse(rows);
+          return enrichRecentMatchWithTeamStats(match, teamId, sides);
+        } catch {
+          return match;
+        }
+      })
+    );
   }
 
   private async fetchTeamRecentMatches(teamId: number, currentFixtureId?: number): Promise<TeamRecentMatch[]> {
@@ -1119,7 +1147,6 @@ export class ApiFootballProvider {
         ]);
         if (homeStats) mapped.home = enrichTeamWithStats(mapped.home, homeStats, "home");
         if (awayStats) mapped.away = enrichTeamWithStats(mapped.away, awayStats, "away");
-        mapped.coverage.hasXg = true;
         mapped.coverage.hasMomentum = true;
       } catch {
         // Non-fatal: analysis will run with basic data
@@ -1149,20 +1176,37 @@ export class ApiFootballProvider {
         // Non-fatal
       }
 
-      // Last 5 finished matches per team
+      // Last 5 finished matches + real /fixtures/statistics (xG, posesión, corners, tiros)
       try {
-        const [homeRecent, awayRecent] = await Promise.all([
+        const [homeRecentRaw, awayRecentRaw] = await Promise.all([
           this.fetchTeamRecentMatches(fixture.teams.home.id, fixture.fixture.id),
           this.fetchTeamRecentMatches(fixture.teams.away.id, fixture.fixture.id),
+        ]);
+        const [homeRecent, awayRecent] = await Promise.all([
+          this.enrichRecentMatchesWithStatistics(homeRecentRaw, fixture.teams.home.id),
+          this.enrichRecentMatchesWithStatistics(awayRecentRaw, fixture.teams.away.id),
         ]);
         if (homeRecent.length > 0) {
           mapped.home.recentMatches = homeRecent;
           mapped.home.form = homeRecent.map((m) => m.result);
+          mapped.home = applyRollingMetricsToTeam(mapped.home, fixture.teams.home.id, homeRecent);
+          if (recentMatchesHaveRealXg(homeRecent)) {
+            mapped.home.xgSource = "api-football";
+          }
         }
         if (awayRecent.length > 0) {
           mapped.away.recentMatches = awayRecent;
           mapped.away.form = awayRecent.map((m) => m.result);
+          mapped.away = applyRollingMetricsToTeam(mapped.away, fixture.teams.away.id, awayRecent);
+          if (recentMatchesHaveRealXg(awayRecent)) {
+            mapped.away.xgSource = "api-football";
+          }
         }
+        mapped.coverage.hasXg =
+          recentMatchesHaveRealXg(mapped.home.recentMatches) ||
+          recentMatchesHaveRealXg(mapped.away.recentMatches);
+        mapped.coverage.hasTacticalStats =
+          teamHasRealTacticalStats(mapped.home) || teamHasRealTacticalStats(mapped.away);
       } catch {
         // Non-fatal
       }

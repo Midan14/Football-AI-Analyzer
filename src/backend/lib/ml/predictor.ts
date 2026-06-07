@@ -44,6 +44,7 @@ export type HybridMLPrediction = MLPrediction & {
   pipeline: string;
   hybridReady: boolean;
   qualityGatePassed: boolean;
+  backtestGatePassed: boolean;
   dixonColes: {
     lambda_local: number;
     mu_visitante: number;
@@ -239,6 +240,9 @@ async function predictWithHybridFastAPI(fixture: Fixture): Promise<HybridMLPredi
       pipeline: data.pipeline ?? "hybrid-dc-xgb",
       hybridReady: Boolean(data.ready),
       qualityGatePassed: Boolean(data.quality_gate_passed),
+      backtestGatePassed: Boolean(
+        data.backtest_gate_passed ?? data.metadata?.backtest_gate ?? false
+      ),
       dixonColes: data.dixon_coles ?? {
         lambda_local: 1.3,
         mu_visitante: 1.1,

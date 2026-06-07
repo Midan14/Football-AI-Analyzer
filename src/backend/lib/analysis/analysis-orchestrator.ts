@@ -24,6 +24,11 @@ import {
 } from "./roi-calibration";
 import { reconcileHybridProbabilities } from "./hybrid-consistency";
 import { predictionMarketKey } from "@/shared/prediction-market-mapping";
+import { fetchLlmContextAdjustment } from "./context-llm";
+import {
+  buildHeuristicContextAdjustment,
+  mergeContextAdjustments,
+} from "./squad-impact";
 
 type AnalyzeOptions = {
   events?: MatchEvent[];
@@ -614,7 +619,14 @@ export async function runFullAnalysis(
   fixture: Fixture,
   options?: AnalyzeOptions
 ): Promise<FullAnalysisResult> {
-  let analysis = analyzeFixture(fixture, { events: options?.events });
+  const heuristicGoalContext = buildHeuristicContextAdjustment(fixture);
+  const llmGoalContext = await fetchLlmContextAdjustment(fixture);
+  const goalContext = mergeContextAdjustments(heuristicGoalContext, llmGoalContext);
+
+  let analysis = analyzeFixture(fixture, {
+    events: options?.events,
+    goalContext,
+  });
   analysis = ensureAdvancedModelsComplete(analysis, fixture);
 
   let extendedMerged = false;
@@ -641,13 +653,17 @@ export async function runFullAnalysis(
   let mlBlended = false;
   if (isHybridPrediction(mlPrediction)) {
     analysis = mergeMLExplainability(analysis, mlPrediction);
-    if (mlPrediction.qualityGatePassed) {
-      // Trusted, backtested + calibrated model: blend into probabilities.
+    const hasRealApiFeatures =
+      fixture.coverage.hasXg === true && fixture.coverage.hasTacticalStats === true;
+    const canBlendHybrid =
+      hasRealApiFeatures &&
+      (mlPrediction.qualityGatePassed ||
+        mlPrediction.backtestGatePassed ||
+        mlPrediction.hybridReady);
+    if (canBlendHybrid) {
       analysis = applyHybridAnalysis(analysis, fixture, mlPrediction);
       mlBlended = true;
     } else {
-      // Untrusted model (synthetic / failed backtest): keep the Poisson core
-      // as the answer and only surface λ/μ + explainability for transparency.
       analysis = attachHybridGoalModelDisplay(analysis, mlPrediction);
     }
   } else if (mlPrediction?.probabilities?.ensemble) {

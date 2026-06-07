@@ -51,6 +51,10 @@ class HybridPipeline:
     def quality_gate_passed(self) -> bool:
         return bool(self.metadata.get("quality_gate_passed", False))
 
+    @property
+    def backtest_gate_passed(self) -> bool:
+        return bool(self.metadata.get("backtest_gate", False))
+
     def _apply_calibration(self, proba: np.ndarray) -> np.ndarray:
         """Apply persisted calibration. Supports temperature scaling (current) and
         legacy per-class Platt params for backward compatibility."""
@@ -147,6 +151,7 @@ class HybridPipeline:
             "pipeline": "hybrid-dc-xgb",
             "ready": self.ready,
             "quality_gate_passed": self.quality_gate_passed,
+            "backtest_gate_passed": self.backtest_gate_passed,
             "dixon_coles": dc,
             "probabilities": {
                 "HOME_WIN": markets["1X2"]["Local"],
