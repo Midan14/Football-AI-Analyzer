@@ -3,6 +3,7 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { AnalysisResult, DeepAnalysisResult, Fixture } from "@/shared/domain";
+import { buildAdvancedReport, type ReportFigure, type ReportSection } from "./advanced-report";
 
 const GRADE_COLORS: Record<string, [number, number, number]> = {
   A: [34, 197, 94],
@@ -59,27 +60,57 @@ function addMonteCarloSection(
 
   let y = startY + 10;
   doc.setFontSize(10);
-  doc.text(`Iteraciones: ${monteCarlo.iterations}`, 14, y);
+  doc.text(`Iteraciones: ${monteCarlo.iterations.toLocaleString("es-CO")}`, 14, y);
   y += 6;
   doc.text(`Sharp Ratio: ${monteCarlo.sharpRatio}`, 14, y);
   y += 6;
   doc.text(`Confianza Over 2.5: ${monteCarlo.over25Confidence}%`, 14, y);
   y += 6;
+  if (monteCarlo.hybridMix) {
+    doc.text(
+      `Mezcla híbrida: ${monteCarlo.hybridMix.poissonPct}% Poisson / ${monteCarlo.hybridMix.heavyTailPct}% cola pesada`,
+      14,
+      y
+    );
+    y += 6;
+  }
+
+  const scorelineRows = monteCarlo.topScorelines?.slice(0, 8).map((row) => [
+    row.score,
+    `${row.probability}%`,
+  ]) ?? [];
 
   autoTable(doc, {
     startY: y + 4,
     head: [["Métrica", "Valor"]],
     body: [
-      ["Iteraciones", String(monteCarlo.iterations)],
+      ["Iteraciones", monteCarlo.iterations.toLocaleString("es-CO")],
       ["Over 2.5 Confianza", `${monteCarlo.over25Confidence}%`],
       ["Sharp Ratio", String(monteCarlo.sharpRatio)],
+      ...(monteCarlo.hybridMix
+        ? [["Mezcla", `${monteCarlo.hybridMix.poissonPct}% Poisson / ${monteCarlo.hybridMix.heavyTailPct}% cola pesada`]]
+        : []),
     ],
     theme: "striped",
     headStyles: { fillColor: [139, 92, 246] },
     margin: { left: 14 },
   });
 
-  return (doc as any).lastAutoTable?.finalY ?? y + 40;
+  y = (doc as any).lastAutoTable?.finalY ?? y + 40;
+
+  if (scorelineRows.length) {
+    autoTable(doc, {
+      startY: y + 8,
+      head: [["Marcador", "Probabilidad simulada"]],
+      body: scorelineRows,
+      theme: "striped",
+      headStyles: { fillColor: [34, 197, 94] },
+      margin: { left: 14 },
+    });
+    y = (doc as any).lastAutoTable?.finalY ?? y + 40;
+  }
+
+  return y;
 }
 
 function addHeavyTailSection(
@@ -408,4 +439,225 @@ export function exportReportToPDF(
   );
 
   doc.save(`reporte-${fixture.home.name}-vs-${fixture.away.name}.pdf`);
+}
+
+// ── Advanced 27-section report ────────────────────────────────────────────────
+
+const A4_BOTTOM = 282;
+const MARGIN_X = 14;
+const CONTENT_W = 182;
+
+function ensureSpace(doc: jsPDF, y: number, needed: number): number {
+  if (y + needed > A4_BOTTOM) {
+    doc.addPage();
+    return 20;
+  }
+  return y;
+}
+
+function drawBarsFigure(doc: jsPDF, y: number, fig: Extract<ReportFigure, { kind: "bars" }>): number {
+  let cursor = ensureSpace(doc, y, 16 + fig.bars.length * 7);
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  doc.text(fig.title, MARGIN_X, cursor);
+  cursor += 5;
+  const max = fig.max ?? Math.max(1, ...fig.bars.map((b) => b.value));
+  const barMaxW = 110;
+  for (const bar of fig.bars) {
+    const w = Math.max(0.5, (bar.value / max) * barMaxW);
+    const [r, g, b] = bar.color ?? [56, 189, 248];
+    doc.setFontSize(8);
+    doc.setTextColor(60, 60, 60);
+    doc.text(String(bar.label).slice(0, 14), MARGIN_X, cursor + 3.5);
+    doc.setFillColor(r, g, b);
+    doc.rect(MARGIN_X + 32, cursor, w, 4.5, "F");
+    doc.setTextColor(90, 90, 90);
+    doc.text(`${bar.value.toFixed(1)}${fig.unit ?? ""}`, MARGIN_X + 34 + w, cursor + 3.5);
+    cursor += 7;
+  }
+  return cursor + 2;
+}
+
+function drawGroupedBarsFigure(doc: jsPDF, y: number, fig: Extract<ReportFigure, { kind: "groupedBars" }>): number {
+  let cursor = ensureSpace(doc, y, 16 + fig.groups.length * 12);
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  doc.text(`${fig.title}  (azul=modelo, gris=mercado)`, MARGIN_X, cursor);
+  cursor += 5;
+  const max = Math.max(1, ...fig.groups.flatMap((gr) => [gr.model, gr.market]));
+  const barMaxW = 100;
+  for (const gr of fig.groups) {
+    doc.setFontSize(8);
+    doc.setTextColor(60, 60, 60);
+    doc.text(gr.label.slice(0, 12), MARGIN_X, cursor + 3.5);
+    doc.setFillColor(56, 189, 248);
+    doc.rect(MARGIN_X + 26, cursor, Math.max(0.5, (gr.model / max) * barMaxW), 3.5, "F");
+    doc.setTextColor(90, 90, 90);
+    doc.text(`${gr.model.toFixed(1)}%`, MARGIN_X + 28 + (gr.model / max) * barMaxW, cursor + 3);
+    doc.setFillColor(150, 150, 150);
+    doc.rect(MARGIN_X + 26, cursor + 4.5, Math.max(0.5, (gr.market / max) * barMaxW), 3.5, "F");
+    doc.text(`${gr.market.toFixed(1)}%`, MARGIN_X + 28 + (gr.market / max) * barMaxW, cursor + 7.5);
+    cursor += 12;
+  }
+  return cursor + 2;
+}
+
+function drawRadarFigure(doc: jsPDF, y: number, fig: Extract<ReportFigure, { kind: "radar" }>): number {
+  const size = 70;
+  let cursor = ensureSpace(doc, y, size + 16);
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  doc.text(`${fig.title}  (azul=${"local"}, naranja=${"visita"})`, MARGIN_X, cursor);
+  cursor += 4;
+  const cx = MARGIN_X + size / 2 + 10;
+  const cy = cursor + size / 2;
+  const radius = size / 2;
+  const n = fig.axes.length;
+  const angle = (i: number) => (Math.PI * 2 * i) / n - Math.PI / 2;
+
+  // grid
+  doc.setDrawColor(210, 210, 210);
+  for (let ring = 1; ring <= 4; ring += 1) {
+    const rr = (radius * ring) / 4;
+    for (let i = 0; i < n; i += 1) {
+      const x1 = cx + rr * Math.cos(angle(i));
+      const y1 = cy + rr * Math.sin(angle(i));
+      const x2 = cx + rr * Math.cos(angle((i + 1) % n));
+      const y2 = cy + rr * Math.sin(angle((i + 1) % n));
+      doc.line(x1, y1, x2, y2);
+    }
+  }
+  // axes + labels
+  doc.setFontSize(6.5);
+  doc.setTextColor(110, 110, 110);
+  for (let i = 0; i < n; i += 1) {
+    const x = cx + radius * Math.cos(angle(i));
+    const yy = cy + radius * Math.sin(angle(i));
+    doc.line(cx, cy, x, yy);
+    doc.text(fig.axes[i].axis.slice(0, 10), cx + (radius + 4) * Math.cos(angle(i)) - 6, yy + (radius + 4) * Math.sin(angle(i)) / radius);
+  }
+
+  const plot = (key: "home" | "away", color: [number, number, number]) => {
+    doc.setDrawColor(color[0], color[1], color[2]);
+    for (let i = 0; i < n; i += 1) {
+      const v1 = Math.max(0, Math.min(100, fig.axes[i][key])) / 100;
+      const v2 = Math.max(0, Math.min(100, fig.axes[(i + 1) % n][key])) / 100;
+      const x1 = cx + radius * v1 * Math.cos(angle(i));
+      const y1 = cy + radius * v1 * Math.sin(angle(i));
+      const x2 = cx + radius * v2 * Math.cos(angle((i + 1) % n));
+      const y2 = cy + radius * v2 * Math.sin(angle((i + 1) % n));
+      doc.line(x1, y1, x2, y2);
+    }
+  };
+  plot("home", [56, 189, 248]);
+  plot("away", [249, 115, 22]);
+
+  return cursor + size + 6;
+}
+
+function renderSection(doc: jsPDF, section: ReportSection, y: number): number {
+  let cursor = ensureSpace(doc, y, 18);
+  doc.setFontSize(13);
+  doc.setTextColor(33, 33, 33);
+  doc.text(`${section.index}. ${section.title}`, MARGIN_X, cursor);
+  cursor += 6;
+
+  doc.setFontSize(9.5);
+  doc.setTextColor(55, 55, 55);
+  for (const para of section.paragraphs) {
+    const lines = doc.splitTextToSize(para, CONTENT_W);
+    cursor = ensureSpace(doc, cursor, lines.length * 4.6 + 2);
+    doc.text(lines, MARGIN_X, cursor);
+    cursor += lines.length * 4.6 + 3;
+  }
+
+  if (section.figure) {
+    if (section.figure.kind === "bars") cursor = drawBarsFigure(doc, cursor, section.figure);
+    else if (section.figure.kind === "groupedBars") cursor = drawGroupedBarsFigure(doc, cursor, section.figure);
+    else if (section.figure.kind === "radar") cursor = drawRadarFigure(doc, cursor, section.figure);
+  }
+
+  if (section.table) {
+    cursor = ensureSpace(doc, cursor, 20);
+    autoTable(doc, {
+      startY: cursor,
+      head: [section.table.columns],
+      body: section.table.rows,
+      theme: "striped",
+      styles: { fontSize: 7.5, cellPadding: 1.4 },
+      headStyles: { fillColor: [56, 189, 248] },
+      margin: { left: MARGIN_X, right: MARGIN_X },
+    });
+    cursor = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? cursor) + 4;
+  }
+
+  if (section.caveats && section.caveats.length > 0) {
+    cursor = ensureSpace(doc, cursor, section.caveats.length * 4.5 + 4);
+    doc.setFontSize(8);
+    doc.setTextColor(180, 95, 6);
+    for (const c of section.caveats) {
+      const lines = doc.splitTextToSize(`* ${c}`, CONTENT_W);
+      cursor = ensureSpace(doc, cursor, lines.length * 4);
+      doc.text(lines, MARGIN_X, cursor);
+      cursor += lines.length * 4 + 1;
+    }
+  }
+
+  return cursor + 6;
+}
+
+export function exportAdvancedReportToPDF(
+  fixture: Fixture,
+  analysis: AnalysisResult,
+  modelMode: string,
+  scenario: string,
+  riskLevel: string
+) {
+  const report = buildAdvancedReport(fixture, analysis);
+  const doc = new jsPDF();
+  const pw = doc.internal.pageSize.getWidth();
+
+  // Cover
+  doc.setFontSize(22);
+  doc.setTextColor(33, 33, 33);
+  doc.text(report.title, pw / 2, 28, { align: "center" });
+  doc.setFontSize(13);
+  doc.setTextColor(70, 70, 70);
+  doc.text(report.subtitle, pw / 2, 40, { align: "center" });
+  doc.setFontSize(10);
+  doc.setTextColor(120, 120, 120);
+  doc.text(`Fecha: ${fixture.kickoff}  |  Modo: ${modelMode}  |  Escenario: ${scenario}  |  Riesgo: ${riskLevel}`, pw / 2, 49, { align: "center" });
+  doc.text(`27 secciones · datos reales · confianza ${analysis.confidence.score}/100`, pw / 2, 56, { align: "center" });
+
+  let y = 68;
+  if (report.coverageCaveats.length > 0) {
+    doc.setFontSize(11);
+    doc.setTextColor(180, 95, 6);
+    doc.text("Avisos de cobertura / fiabilidad", MARGIN_X, y);
+    y += 6;
+    doc.setFontSize(8.5);
+    for (const c of report.coverageCaveats) {
+      const lines = doc.splitTextToSize(`* ${c}`, CONTENT_W);
+      y = ensureSpace(doc, y, lines.length * 4);
+      doc.text(lines, MARGIN_X, y);
+      y += lines.length * 4 + 1.5;
+    }
+    y += 4;
+  }
+
+  for (const section of report.sections) {
+    y = renderSection(doc, section, y);
+  }
+
+  // Footer disclaimer on the last page
+  y = ensureSpace(doc, y, 16);
+  doc.setFontSize(8.5);
+  doc.setTextColor(150, 150, 150);
+  const disclaimer = doc.splitTextToSize(
+    "Aviso: informe informativo y educativo. Las cifras provienen del motor estadistico real (Poisson/Dixon-Coles y modelo hibrido bajo quality gate); modulos marcados como experimentales no alteran las probabilidades. Las apuestas conllevan riesgo. 18+.",
+    CONTENT_W
+  );
+  doc.text(disclaimer, MARGIN_X, y);
+
+  doc.save(`informe-avanzado-${fixture.home.name}-vs-${fixture.away.name}.pdf`);
 }

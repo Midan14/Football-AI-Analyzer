@@ -9,8 +9,8 @@ const eslintConfig = [
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
       "prefer-const": "warn",
-      "react-hooks/preserve-manual-memoization": "warn",
-      "react-hooks/set-state-in-effect": "warn",
+      "react-hooks/preserve-manual-memoization": "off",
+      "react-hooks/set-state-in-effect": "off",
       "@next/next/no-img-element": "off",
     },
   },
@@ -18,6 +18,7 @@ const eslintConfig = [
     ignores: [
       ".next/**",
       "node_modules/**",
+      "ml-service/**",
       "coverage/**",
       "public/sw.js",
       "scripts/**",

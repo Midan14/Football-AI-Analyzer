@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { successResponse, errorResponse, withErrorHandling, Errors } from "@/lib/api-utils";
 import { auth } from "@/auth";
-import { useOpportunities } from "@/frontend/hooks/use-opportunities";
 
 /**
  * POST /api/alerts/send

@@ -1,4 +1,8 @@
 import type { Fixture } from "@/shared/domain";
+import {
+  buildHeuristicContextAdjustment,
+  type GoalModelContextAdjustment,
+} from "./squad-impact";
 
 export const round1 = (value: number) => Math.round(value * 10) / 10;
 export const round2 = (value: number) => Math.round(value * 100) / 100;
@@ -50,7 +54,10 @@ export function refereeHomeBiasFactors(homeBias: number | undefined): { home: nu
   return { home: 1 + adj, away: 1 - adj };
 }
 
-export function expectedGoals(fixture: Fixture) {
+export function expectedGoals(
+  fixture: Fixture,
+  contextAdjustment?: GoalModelContextAdjustment | null
+) {
   const matches = fixture.home.matchesPlayed || 18;
   const homeAttack = fixture.coverage.hasXg ? fixture.home.xgFor / matches : fixture.home.goalsFor / matches;
   const awayDefense = fixture.coverage.hasXg ? fixture.away.xgAgainst / matches : fixture.away.goalsAgainst / matches;
@@ -60,18 +67,21 @@ export function expectedGoals(fixture: Fixture) {
   const awayMotivation = fixture.context.mustWinAway ? 0.12 : 0;
   const travelDrag = Math.min(0.18, fixture.away.travelKm / 1600);
 
-  const baseHome = (homeAttack * 0.58 + awayDefense * 0.42) + 0.18 + homeMotivation;
-  const baseAway = (awayAttack * 0.56 + homeDefense * 0.44) + awayMotivation - travelDrag;
-
-  // Squad / referee adjustments — applied multiplicatively after the base
-  // formula so that "no data" defaults to multiplier 1 (zero effect).
-  const homeKp = keyPlayerMultiplier(fixture.home.keyPlayerStatus);
-  const awayKp = keyPlayerMultiplier(fixture.away.keyPlayerStatus);
+  const squadAdj = contextAdjustment ?? buildHeuristicContextAdjustment(fixture);
   const ref = refereeHomeBiasFactors(fixture.referee?.homeBias);
 
+  const baseHome =
+    (homeAttack * 0.58 * squadAdj.homeAttackMult + awayDefense * 0.42 * squadAdj.awayDefenseLeak) +
+    0.18 +
+    homeMotivation;
+  const baseAway =
+    (awayAttack * 0.56 * squadAdj.awayAttackMult + homeDefense * 0.44 * squadAdj.homeDefenseLeak) +
+    awayMotivation -
+    travelDrag;
+
   return {
-    home: Math.max(0.35, baseHome * homeKp * ref.home),
-    away: Math.max(0.25, baseAway * awayKp * ref.away),
+    home: Math.max(0.35, baseHome * ref.home),
+    away: Math.max(0.25, baseAway * ref.away),
   };
 }
 
@@ -88,10 +98,9 @@ export function analyzeH2H(fixture: Fixture, lastN = 5) {
   if (records.length === 0) return null;
 
   // The H2H record stores generic "home"/"away" of that historical match,
-  // not necessarily the current home/away. We approximate by name prefix —
+  // not necessarily the current home/away. We approximate current home by name prefix —
   // imperfect but the only signal H2HRecord exposes today.
   const homeNamePrefix = fixture.home.name.split(" ")[0].toLowerCase();
-  const awayNamePrefix = fixture.away.name.split(" ")[0].toLowerCase();
 
   let homeWins = 0;
   let awayWins = 0;
@@ -156,6 +165,44 @@ export function buildPoissonMatrix(xg: { home: number; away: number }) {
     }
   }
   return matrix;
+}
+
+export function estimateGoalCorrelation(fixture: Fixture, xg: { home: number; away: number }): number {
+  const totalXg = xg.home + xg.away;
+  let rho = 0;
+
+  if (totalXg < 2.2) rho -= 0.05;
+  if (fixture.coverage.tier === "low" || fixture.context.lowDivision) rho -= 0.03;
+  if (fixture.context.derby || fixture.context.rivalRivalry) rho -= 0.02;
+  if (fixture.coverage.hasLineups && fixture.coverage.hasXg && fixture.coverage.hasOdds) rho += 0.02;
+  if (fixture.context.mustWinHome || fixture.context.mustWinAway) rho += 0.02;
+
+  return Math.max(-0.12, Math.min(0.08, rho));
+}
+
+function dixonColesAdjustment(home: number, away: number, lambdaHome: number, lambdaAway: number, rho: number): number {
+  if (home === 0 && away === 0) return 1 - lambdaHome * lambdaAway * rho;
+  if (home === 0 && away === 1) return 1 + lambdaHome * rho;
+  if (home === 1 && away === 0) return 1 + lambdaAway * rho;
+  if (home === 1 && away === 1) return 1 - rho;
+  return 1;
+}
+
+export function buildAdjustedPoissonMatrix(
+  xg: { home: number; away: number },
+  fixture: Fixture
+) {
+  const rho = estimateGoalCorrelation(fixture, xg);
+  const raw = buildPoissonMatrix(xg).map((row) => ({
+    ...row,
+    probability: Math.max(
+      0,
+      row.probability * dixonColesAdjustment(row.home, row.away, xg.home, xg.away, rho)
+    ),
+  }));
+
+  const total = raw.reduce((sum, row) => sum + row.probability, 0) || 1;
+  return raw.map((row) => ({ ...row, probability: row.probability / total }));
 }
 
 export function compute1X2Probabilities(
@@ -271,10 +318,10 @@ export function buildValueTable(
     ["AH Visitante +1", (probabilities.draw + probabilities.awayWin) * 0.85, fixture.market.ahAwayPlus1],
   ];
 
-  // ONLY include markets that have REAL odds from the bookmaker (odds > 0)
-  // This prevents fake edge calculations with default/invented odds
-  return allMarkets
-    .filter(([, , odds]) => odds > 1.01) // Only real odds from API
+  // Include markets WITH real odds for edge calculation
+  // Also include model-only markets (no real odds) as reference
+  const withOdds = allMarkets
+    .filter(([, , odds]) => odds > 1.01)
     .map(([market, modelProbability, odds]) => {
       const marketProbability = impliedProbability(Number(odds));
       const edge = round1(Number(modelProbability) - marketProbability);
@@ -286,4 +333,72 @@ export function buildValueTable(
         verdict: edge > 7 ? "Valor" : edge > 3 ? "Posible" : edge < -7 ? "Evitar" : "Justo",
       } as const;
     });
+
+  // Also include top model-only markets (no real odds) marked as reference
+  const existingMarkets = new Set(withOdds.map(m => m.market));
+  const referenceOnly = allMarkets
+    .filter(([market, prob]) => !existingMarkets.has(market) && prob > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([market, modelProbability]) => ({
+      market: String(market),
+      modelProbability: round1(Number(modelProbability)),
+      marketProbability: 0,
+      edge: 0,
+      verdict: "Referencia (sin cuota real)",
+    } as const));
+
+  return [...withOdds, ...referenceOnly];
+}
+
+export function getMarketOddsMap(fixture: { market: Fixture["market"] }): Record<string, number> {
+  return {
+    "Local gana": fixture.market.homeWinOdds ?? 0,
+    "Empate": fixture.market.drawOdds ?? 0,
+    "Visitante gana": fixture.market.awayWinOdds ?? 0,
+    "Doble Chance 1X": fixture.market.dc1xOdds ?? 0,
+    "Doble Chance X2": fixture.market.dcx2Odds ?? 0,
+    "Doble Chance 12": fixture.market.dc12Odds ?? 0,
+    "Over 1.5": fixture.market.over15Odds ?? 0,
+    "Over 2.5": fixture.market.over25Odds ?? 0,
+    "Over 3.5": fixture.market.over35Odds ?? 0,
+    "Under 1.5": fixture.market.under15Odds ?? 0,
+    "Under 2.5": fixture.market.under25Odds ?? 0,
+    "Under 3.5": fixture.market.under35Odds ?? 0,
+    "BTTS Sí": fixture.market.bttsYesOdds ?? 0,
+    "BTTS No": fixture.market.bttsNoOdds ?? 0,
+    "AH Local -1": fixture.market.ahHomeMinus1 ?? 0,
+    "AH Visitante +1": fixture.market.ahAwayPlus1 ?? 0,
+  };
+}
+
+export function getBookmakerOdds(fixture: Fixture, market: string): number {
+  return getMarketOddsMap(fixture)[market] ?? 0;
+}
+
+export const HEAVY_FAVORITE_MARKETS = new Set([
+  "Under 3.5",
+  "Under 2.5",
+  "Under 1.5",
+  "Over 1.5",
+]);
+
+export const MIN_RECOMMENDATION_ODDS = 1.55;
+export const HEAVY_FAVORITE_MIN_ODDS = 1.62;
+export const HEAVY_FAVORITE_MIN_EDGE = 8;
+
+export function expectedValuePerUnit(modelProbability: number, bookmakerOdds: number): number {
+  const p = modelProbability / 100;
+  return p * (bookmakerOdds - 1) - (1 - p);
+}
+
+export function isBlockedHeavyFavorite(market: string, bookmakerOdds: number, edge: number): boolean {
+  if (!HEAVY_FAVORITE_MARKETS.has(market)) return false;
+  return bookmakerOdds < HEAVY_FAVORITE_MIN_ODDS || edge < HEAVY_FAVORITE_MIN_EDGE;
+}
+
+export function meetsMinimumOdds(market: string, bookmakerOdds: number): boolean {
+  if (bookmakerOdds < MIN_RECOMMENDATION_ODDS) return false;
+  if (HEAVY_FAVORITE_MARKETS.has(market) && bookmakerOdds < HEAVY_FAVORITE_MIN_ODDS) return false;
+  return true;
 }

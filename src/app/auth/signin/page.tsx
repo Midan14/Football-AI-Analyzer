@@ -24,10 +24,9 @@ export default function SignInPage() {
       redirect: false,
     });
 
-    setLoading(false);
-
     if (result?.error) {
       setError("Credenciales inválidas. Verifica tu email y contraseña.");
+      setLoading(false);
       return;
     }
 
@@ -91,7 +90,7 @@ export default function SignInPage() {
             disabled={loading}
             className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
           >
-            {loading ? "Iniciando sesión…" : "Iniciar sesión"}
+            {loading ? "Entrando al dashboard…" : "Iniciar sesión"}
           </button>
         </form>
 

@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
 ML Prediction Service — Node.js callable via stdin/stdout
+
+DEPRECATED: This standalone CatBoost/XGB/LGBM stack is legacy. The supported
+single source of truth is the hybrid Dixon-Coles -> XGBoost pipeline under
+`ml-service/` (FastAPI `/predict/hybrid`). This script is only invoked when
+ML_ENABLE_LEGACY_LOCAL=1 and its output is treated as display-only (it never
+overrides the Poisson core in the TypeScript orchestrator).
+
 Usage:
     echo '{"fixture": {...}}' | python3 ml/predict.py
 Output:
@@ -11,7 +18,7 @@ import json
 import sys
 import os
 import warnings
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -26,29 +33,29 @@ warnings.filterwarnings("ignore")
 
 MODELS_DIR = os.environ.get("ML_MODELS_DIR", "ml/models")
 
-# Must match training script features
+# Must match ml/train.py feature names (camelCase)
 NUMERIC_FEATURES = [
-    "home_table_position", "home_points", "home_matches_played",
-    "home_goals_for", "home_goals_against", "home_xg_for", "home_xg_against",
-    "home_rest_days", "home_motivation",
-    "away_table_position", "away_points", "away_matches_played",
-    "away_goals_for", "away_goals_against", "away_xg_for", "away_xg_against",
-    "away_rest_days", "away_travel_km", "away_motivation",
-    "relegation_risk", "psychological_pressure", "underdog_freedom", "favorite_paralysis",
-    "prize_money",
-    "referee_avg_cards", "referee_home_bias", "referee_avg_penalties",
-    "home_win_odds", "draw_odds", "away_win_odds", "over25_odds", "btts_yes_odds",
+    "homeTablePosition", "homePoints", "homeMatchesPlayed",
+    "homeGoalsFor", "homeGoalsAgainst", "homeXgFor", "homeXgAgainst",
+    "homeRestDays", "homeMotivation",
+    "awayTablePosition", "awayPoints", "awayMatchesPlayed",
+    "awayGoalsFor", "awayGoalsAgainst", "awayXgFor", "awayXgAgainst",
+    "awayRestDays", "awayTravelKm", "awayMotivation",
+    "relegationRisk", "psychologicalPressure", "underdogFreedom", "favoriteParalysis",
+    "prizeMoney",
+    "refereeAvgCards", "refereeHomeBias", "refereeAvgPenalties",
+    "homeWinOdds", "drawOdds", "awayWinOdds", "over25Odds", "bttsYesOdds",
 ]
 
 CATEGORICAL_FEATURES = [
-    "coverage_tier", "weather_risk", "referee_strictness",
-    "home_key_player_status", "away_key_player_status",
+    "coverageTier", "weatherRisk", "refereeStrictness",
+    "homeKeyPlayerStatus", "awayKeyPlayerStatus",
 ]
 
 BOOLEAN_FEATURES = [
-    "derby", "must_win_home", "must_win_away", "low_division",
-    "playoff", "rival_rivalry", "copa_vs_league",
-    "has_lineups", "has_odds", "has_xg", "has_injuries", "has_referee",
+    "derby", "mustWinHome", "mustWinAway", "lowDivision",
+    "playoff", "rivalRivalry", "copaVsLeague",
+    "hasLineups", "hasOdds", "hasXg", "hasInjuries", "hasReferee",
 ]
 
 ALL_FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES + BOOLEAN_FEATURES
@@ -88,82 +95,111 @@ def fixture_to_features(fixture: dict) -> pd.DataFrame:
     mkt = fixture.get("market", {})
 
     row = {
-        "home_table_position": home.get("tablePosition", 10),
-        "home_points": home.get("pointsTotal", 0),
-        "home_matches_played": home.get("matchesPlayed", 1),
-        "home_goals_for": home.get("goalsFor", 0),
-        "home_goals_against": home.get("goalsAgainst", 0),
-        "home_xg_for": home.get("xgFor", 0),
-        "home_xg_against": home.get("xgAgainst", 0),
-        "home_rest_days": home.get("restDays", 3),
-        "home_motivation": home.get("motivation", 50),
-        "home_key_player_status": home.get("keyPlayerStatus", "available"),
+        "homeTablePosition": home.get("tablePosition", 10),
+        "homePoints": home.get("pointsTotal", 0),
+        "homeMatchesPlayed": home.get("matchesPlayed", 1),
+        "homeGoalsFor": home.get("goalsFor", 0),
+        "homeGoalsAgainst": home.get("goalsAgainst", 0),
+        "homeXgFor": home.get("xgFor", 0),
+        "homeXgAgainst": home.get("xgAgainst", 0),
+        "homeRestDays": home.get("restDays", 3),
+        "homeMotivation": home.get("motivation", 50),
+        "homeKeyPlayerStatus": home.get("keyPlayerStatus", "available"),
 
-        "away_table_position": away.get("tablePosition", 10),
-        "away_points": away.get("pointsTotal", 0),
-        "away_matches_played": away.get("matchesPlayed", 1),
-        "away_goals_for": away.get("goalsFor", 0),
-        "away_goals_against": away.get("goalsAgainst", 0),
-        "away_xg_for": away.get("xgFor", 0),
-        "away_xg_against": away.get("xgAgainst", 0),
-        "away_rest_days": away.get("restDays", 3),
-        "away_travel_km": away.get("travelKm", 0),
-        "away_motivation": away.get("motivation", 50),
-        "away_key_player_status": away.get("keyPlayerStatus", "available"),
+        "awayTablePosition": away.get("tablePosition", 10),
+        "awayPoints": away.get("pointsTotal", 0),
+        "awayMatchesPlayed": away.get("matchesPlayed", 1),
+        "awayGoalsFor": away.get("goalsFor", 0),
+        "awayGoalsAgainst": away.get("goalsAgainst", 0),
+        "awayXgFor": away.get("xgFor", 0),
+        "awayXgAgainst": away.get("xgAgainst", 0),
+        "awayRestDays": away.get("restDays", 3),
+        "awayTravelKm": away.get("travelKm", 0),
+        "awayMotivation": away.get("motivation", 50),
+        "awayKeyPlayerStatus": away.get("keyPlayerStatus", "available"),
 
         "derby": int(ctx.get("derby", False)),
-        "must_win_home": int(ctx.get("mustWinHome", False)),
-        "must_win_away": int(ctx.get("mustWinAway", False)),
-        "low_division": int(ctx.get("lowDivision", False)),
-        "weather_risk": ctx.get("weatherRisk", "low"),
+        "mustWinHome": int(ctx.get("mustWinHome", False)),
+        "mustWinAway": int(ctx.get("mustWinAway", False)),
+        "lowDivision": int(ctx.get("lowDivision", False)),
+        "weatherRisk": ctx.get("weatherRisk", "low"),
         "playoff": int(ctx.get("playoff", False)),
-        "relegation_risk": ctx.get("relegationRisk", 0),
-        "rival_rivalry": int(ctx.get("rivalRivalry", False)),
-        "copa_vs_league": int(ctx.get("copaVsLeague", False)),
-        "prize_money": ctx.get("prizeMoney", 0),
-        "psychological_pressure": ctx.get("psychologicalPressure", 0),
-        "underdog_freedom": ctx.get("underdogFreedom", 0),
-        "favorite_paralysis": ctx.get("favoriteParalysis", 0),
+        "relegationRisk": ctx.get("relegationRisk", 0),
+        "rivalRivalry": int(ctx.get("rivalRivalry", False)),
+        "copaVsLeague": int(ctx.get("copaVsLeague", False)),
+        "prizeMoney": ctx.get("prizeMoney", 0),
+        "psychologicalPressure": ctx.get("psychologicalPressure", 0),
+        "underdogFreedom": ctx.get("underdogFreedom", 0),
+        "favoriteParalysis": ctx.get("favoriteParalysis", 0),
 
-        "coverage_tier": cov.get("tier", "standard"),
-        "has_lineups": int(cov.get("hasLineups", False)),
-        "has_odds": int(cov.get("hasOdds", False)),
-        "has_xg": int(cov.get("hasXg", False)),
-        "has_injuries": int(cov.get("hasInjuries", False)),
-        "has_referee": int(cov.get("hasReferee", False)),
-        "referee_avg_cards": ref.get("avgCards", 3.5),
-        "referee_home_bias": ref.get("homeBias", 0),
-        "referee_avg_penalties": ref.get("avgPenalties", 0.2),
-        "referee_strictness": ref.get("strictness", "medium"),
+        "coverageTier": cov.get("tier", "standard"),
+        "hasLineups": int(cov.get("hasLineups", False)),
+        "hasOdds": int(cov.get("hasOdds", False)),
+        "hasXg": int(cov.get("hasXg", False)),
+        "hasInjuries": int(cov.get("hasInjuries", False)),
+        "hasReferee": int(cov.get("hasReferee", False)),
+        "refereeAvgCards": ref.get("avgCards", 3.5),
+        "refereeHomeBias": ref.get("homeBias", 0),
+        "refereeAvgPenalties": ref.get("avgPenalties", 0.2),
+        "refereeStrictness": ref.get("strictness", "medium"),
 
-        "home_win_odds": mkt.get("homeWinOdds") or 0,
-        "draw_odds": mkt.get("drawOdds") or 0,
-        "away_win_odds": mkt.get("awayWinOdds") or 0,
-        "over25_odds": mkt.get("over25Odds") or 0,
-        "btts_yes_odds": mkt.get("bttsYesOdds") or 0,
+        "homeWinOdds": mkt.get("homeWinOdds") or 0,
+        "drawOdds": mkt.get("drawOdds") or 0,
+        "awayWinOdds": mkt.get("awayWinOdds") or 0,
+        "over25Odds": mkt.get("over25Odds") or 0,
+        "bttsYesOdds": mkt.get("bttsYesOdds") or 0,
     }
     return pd.DataFrame([row])
 
 
-def encode_for_xgboost_lgbm(df: pd.DataFrame) -> pd.DataFrame:
-    """Label-encode categoricals so XGB/LGBM can consume them."""
+# Deterministic category orderings so single-row inference encodes consistently
+# with training (a fresh LabelEncoder per request produced arbitrary codes —
+# the previous behavior was a correctness bug).
+STABLE_CATEGORY_MAPS: Dict[str, Dict[str, int]] = {
+    "coverageTier": {"basic": 0, "standard": 1, "elite": 2, "premium": 3},
+    "weatherRisk": {"low": 0, "medium": 1, "high": 2},
+    "refereeStrictness": {"lenient": 0, "medium": 1, "strict": 2},
+    "homeKeyPlayerStatus": {"available": 0, "doubt": 1, "injured": 2, "suspended": 3},
+    "awayKeyPlayerStatus": {"available": 0, "doubt": 1, "injured": 2, "suspended": 3},
+}
+
+
+def encode_for_xgboost_lgbm(df: pd.DataFrame, meta: Optional[dict] = None) -> pd.DataFrame:
+    """Encode categoricals with a STABLE mapping (training-consistent).
+
+    Prefers `meta['categorical_maps']` when the trained model persisted one;
+    otherwise falls back to STABLE_CATEGORY_MAPS. Unknown categories map to 0.
+    """
+    maps = (meta or {}).get("categorical_maps") or STABLE_CATEGORY_MAPS
     df_enc = df.copy()
     for col in CATEGORICAL_FEATURES:
-        le = LabelEncoder()
-        df_enc[col] = le.fit_transform(df_enc[col].astype(str))
+        mapping = maps.get(col, STABLE_CATEGORY_MAPS.get(col, {}))
+        df_enc[col] = df_enc[col].astype(str).map(lambda v: mapping.get(v, 0))
     return df_enc
 
 
+def align_feature_columns(df: pd.DataFrame, meta: dict) -> pd.DataFrame:
+    """Reorder columns to match training order from meta.json."""
+    feature_names = meta.get("feature_names")
+    if not feature_names:
+        return df[ALL_FEATURES]
+    for col in feature_names:
+        if col not in df.columns:
+            df[col] = 0
+    return df[feature_names]
+
+
 def predict(fixture: dict, models: dict, meta: dict):
-    df = fixture_to_features(fixture)
-    df_enc = encode_for_xgboost_lgbm(df)
+    df = align_feature_columns(fixture_to_features(fixture), meta)
+    df_enc = encode_for_xgboost_lgbm(df, meta)
 
     classes = meta.get("classes", ["AWAY_WIN", "DRAW", "HOME_WIN"])
     probabilities = {}
 
     if "catboost" in models:
         cb = models["catboost"]
-        proba = cb.predict_proba(df)[0]
+        # Training uses label-encoded categoricals for all models
+        proba = cb.predict_proba(df_enc)[0]
         probabilities["catboost"] = {cls: round(float(proba[i]), 4) for i, cls in enumerate(classes)}
 
     if "xgboost" in models:
@@ -181,6 +217,23 @@ def predict(fixture: dict, models: dict, meta: dict):
     for p in probabilities.values():
         all_probs.append([p[c] for c in classes])
     ensemble = np.mean(all_probs, axis=0)
+
+    # Apply calibration if present in meta.json
+    if "calibration" in meta and meta["calibration"]:
+        try:
+            params = meta["calibration"]
+            calibrated = np.zeros_like(ensemble)
+            for c in range(len(classes)):
+                p_val = min(1.0 - 1e-5, max(1e-5, float(ensemble[c])))
+                logit = np.log(p_val / (1.0 - p_val))
+                calibrated[c] = 1.0 / (1.0 + np.exp(params[c]["A"] * logit + params[c]["B"]))
+            
+            total_cal = calibrated.sum()
+            if total_cal > 0:
+                ensemble = calibrated / total_cal
+        except Exception:
+            pass
+
     probabilities["ensemble"] = {cls: round(float(ensemble[i]), 4) for i, cls in enumerate(classes)}
 
     # Best class
@@ -193,7 +246,7 @@ def predict(fixture: dict, models: dict, meta: dict):
     if "catboost" in models:
         try:
             explainer = shap.TreeExplainer(models["catboost"])
-            shap_values = explainer.shap_values(df)
+            shap_values = explainer.shap_values(df_enc)
             # shap_values is list of 3 arrays (one per class) for multiclass
             if isinstance(shap_values, list) and len(shap_values) == len(classes):
                 class_shap = shap_values[best_idx][0]

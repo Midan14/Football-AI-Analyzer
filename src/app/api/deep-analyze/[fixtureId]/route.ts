@@ -26,7 +26,9 @@ export const GET = withErrorHandling(async (request: NextRequest, context: { par
 
   // Rate limiting — deep analysis is heavier, lower limits
   const session = await auth();
-  const rateLimit = await checkRateLimit(session?.user?.id, "deep-analyze", session?.user?.id ? 50 : 10, 15);
+  if (!session?.user?.id) return errorResponse(Errors.UNAUTHORIZED);
+
+  const rateLimit = await checkRateLimit(session.user.id, "deep-analyze", 50, 15);
   if (!rateLimit.allowed) {
     return errorResponse({ code: "RATE_LIMITED", message: "Demasiadas solicitudes. Intenta más tarde." }, 429);
   }

@@ -71,8 +71,24 @@ describe("analyzeFixture", () => {
       },
     });
 
-    expect(result.valueTable).toHaveLength(0);
-    expect(result.recommendation.market).toContain("Sin cuota real disponible");
-    expect(result.recommendation.fairOdds).toBeGreaterThan(0);
+    expect(result.valueTable.length).toBeGreaterThanOrEqual(6);
+    expect(result.recommendation.market).toBe("Sin valor claro");
+    expect(result.recommendation.fairOdds).toBe(0);
+    expect(result.recommendation.stakeUnits).toBe(0);
+    expect(result.kelly?.bets ?? []).toHaveLength(0);
+  });
+
+  it("includes newly activated extended models in advancedModels", () => {
+    const result = analyzeFixture(demoFixtures[0]);
+    expect(result.advancedModels?.bivariatePoisson).toBeDefined();
+    expect(result.advancedModels?.temporalBlend.recentWeight).toBe(0.7);
+    expect(result.advancedModels?.timeSeries.ensembleHomeWin).toBeGreaterThan(0);
+    expect(result.advancedModels?.causalSurvival.gnnDelta).toBeDefined();
+    expect(result.advancedModels?.quantumOptimizer.method).toBe("QAOA-simulated");
+    expect(result.advancedModels?.mlOps.runId).toMatch(/^run_/);
+    expect(result.advancedModels?.halfTime.over05HT).toBeGreaterThan(0);
+    expect(result.advancedModels?.cornersEsp.expectedTotalCorners).toBeGreaterThan(0);
+    expect(result.advancedModels?.timeSeries.sarimaHomeWin).toBeGreaterThan(0);
+    expect(result.advancedModels?.explainability.topDrivers.length).toBeGreaterThan(0);
   });
 });

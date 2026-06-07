@@ -19,7 +19,7 @@ import {
   Target,
   Gamepad2,
 } from "lucide-react";
-import type { Fixture } from "@/shared/domain";
+import type { AnalysisResult, Fixture } from "@/shared/domain";
 import {
   Radar,
   RadarChart,
@@ -29,9 +29,12 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { useDeepAnalysis } from "@/frontend/hooks/use-deep-analysis";
+import { ScoreHeatmap, DonutChart1X2, PoissonDistribution, ValueBetBars, RadarMultifactorial } from "./advanced-charts";
 
 type DeepAnalysisViewProps = {
   fixture?: Fixture;
+  onOpenMatchCenter?: () => void;
+  onOpenCalendar?: () => void;
 };
 
 const riskGradeConfig: Record<string, { color: string; bg: string; label: string }> = {
@@ -52,7 +55,7 @@ const categoryIcons: Record<string, React.ReactNode> = {
   Lesiones: <Users size={20} />,
 };
 
-export function DeepAnalysisView({ fixture }: DeepAnalysisViewProps) {
+export function DeepAnalysisView({ fixture, onOpenMatchCenter, onOpenCalendar }: DeepAnalysisViewProps) {
   const { data: deepAnalysis, isLoading, error, dataUpdatedAt, isFetching } = useDeepAnalysis(fixture?.id ?? "");
   const [showAiPrompt, setShowAiPrompt] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
@@ -72,7 +75,21 @@ export function DeepAnalysisView({ fixture }: DeepAnalysisViewProps) {
           <h2><Brain size={22} /> Análisis Profundo</h2>
           <span>Selecciona un partido</span>
         </div>
-        <div className="empty-state large">Selecciona un partido para ejecutar el análisis profundo.</div>
+        <div className="empty-state large">
+          Selecciona un partido para ejecutar el análisis profundo.
+          <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center" }}>
+            {onOpenMatchCenter ? (
+              <button type="button" className="qa-btn-primary" onClick={onOpenMatchCenter}>
+                Ir a Match Center
+              </button>
+            ) : null}
+            {onOpenCalendar ? (
+              <button type="button" className="qa-btn-deep" onClick={onOpenCalendar}>
+                Abrir calendario
+              </button>
+            ) : null}
+          </div>
+        </div>
       </article>
     );
   }
@@ -154,7 +171,7 @@ export function DeepAnalysisView({ fixture }: DeepAnalysisViewProps) {
             Análisis generado: {new Date(dataUpdatedAt).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "America/Bogota" })} COT
           </span>
         )}
-        <span className="deep-models-badge">16 modelos activos</span>
+        <span className="deep-models-badge">Modelos auditados</span>
       </div>
 
       <section className="deep-grid">
@@ -182,7 +199,7 @@ export function DeepAnalysisView({ fixture }: DeepAnalysisViewProps) {
         <div className="deep-card monte-carlo-card">
           <div className="deep-card-header">
             <Zap size={24} />
-            <h3>Monte Carlo (1000 iter.)</h3>
+            <h3>Monte Carlo híbrido</h3>
           </div>
           <div className="monte-carlo-stats">
             <div className="mc-stat">
@@ -194,16 +211,34 @@ export function DeepAnalysisView({ fixture }: DeepAnalysisViewProps) {
               <strong>{deepAnalysis.monteCarlo.over25Confidence}%</strong>
             </div>
             <div className="mc-stat">
-              <span>Muestras Local</span>
-              <strong>{deepAnalysis.monteCarlo.homeWinDist.length}</strong>
+              <span>Cola pesada</span>
+              <strong>{deepAnalysis.monteCarlo.hybridMix?.heavyTailPct ?? 0}%</strong>
             </div>
             <div className="mc-stat">
               <span>Iteraciones</span>
-              <strong>{deepAnalysis.monteCarlo.iterations}</strong>
+              <strong>{deepAnalysis.monteCarlo.iterations.toLocaleString("es-CO")}</strong>
             </div>
           </div>
+          {deepAnalysis.monteCarlo.hybridMix && (
+            <div className="mc-mix-note">
+              Mezcla: {deepAnalysis.monteCarlo.hybridMix.poissonPct}% Poisson / {deepAnalysis.monteCarlo.hybridMix.heavyTailPct}% Binomial negativa.
+            </div>
+          )}
+          {!!deepAnalysis.monteCarlo.topScorelines?.length && (
+            <div className="mc-scorelines">
+              <span className="dist-label">Marcadores simulados más probables:</span>
+              <div className="mc-scoreline-grid">
+                {deepAnalysis.monteCarlo.topScorelines.slice(0, 6).map((scoreline) => (
+                  <div key={scoreline.score} className="mc-scoreline-pill">
+                    <strong>{scoreline.score}</strong>
+                    <span>{scoreline.probability}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="distribution-mini">
-            <span className="dist-label">Distribución goles local:</span>
+            <span className="dist-label">Muestra visible goles local:</span>
             <div className="dist-bars">
               {deepAnalysis.monteCarlo.homeWinDist.slice(0, 8).map((g, i) => (
                 <div key={`h-${i}`} className="dist-bar-wrap">
@@ -213,7 +248,7 @@ export function DeepAnalysisView({ fixture }: DeepAnalysisViewProps) {
                 </div>
               ))}
             </div>
-            <span className="dist-label">Distribución goles visita:</span>
+            <span className="dist-label">Muestra visible goles visita:</span>
             <div className="dist-bars">
               {deepAnalysis.monteCarlo.awayWinDist.slice(0, 8).map((g, i) => (
                 <div key={`a-${i}`} className="dist-bar-wrap">
@@ -224,6 +259,23 @@ export function DeepAnalysisView({ fixture }: DeepAnalysisViewProps) {
               ))}
             </div>
           </div>
+        </div>
+
+        {/* Advanced Visualizations */}
+        <div className="deep-card adv-charts-card">
+          <RadarMultifactorial fixture={fixture} analysis={deepAnalysis as unknown as AnalysisResult} />
+        </div>
+        <div className="deep-card adv-charts-card">
+          <DonutChart1X2 fixture={fixture} analysis={deepAnalysis as unknown as AnalysisResult} />
+        </div>
+        <div className="deep-card adv-charts-card">
+          <ScoreHeatmap fixture={fixture} analysis={deepAnalysis as unknown as AnalysisResult} />
+        </div>
+        <div className="deep-card adv-charts-card">
+          <PoissonDistribution fixture={fixture} />
+        </div>
+        <div className="deep-card adv-charts-card wide">
+          <ValueBetBars analysis={deepAnalysis as unknown as AnalysisResult} />
         </div>
 
         <div className="deep-card radar-360-card">
@@ -297,27 +349,42 @@ export function DeepAnalysisView({ fixture }: DeepAnalysisViewProps) {
             </ResponsiveContainer>
           </div>
 
+          {/* Legend */}
+          <div className="radar-360-legend">
+            <span className="radar-360-leg home">
+              <span className="radar-360-leg-line home" />
+              {fixture.home.name} (local)
+            </span>
+            <span className="radar-360-leg away">
+              <span className="radar-360-leg-line away" />
+              {fixture.away.name} (visitante)
+            </span>
+          </div>
+
           {/* Metrics breakdown */}
           <div className="radar-360-metrics">
             {deepAnalysis.radar.map((r) => {
-              const homeColor = r.home >= r.away ? "#2563eb" : "#94a3b8";
-              const awayColor = r.away >= r.home ? "#f59e0b" : "#94a3b8";
+              const homeVal = Math.round(r.home * 10) / 10;
+              const awayVal = Math.round(r.away * 10) / 10;
+              const homeColor = homeVal >= awayVal ? "#2563eb" : "#94a3b8";
+              const awayColor = awayVal >= homeVal ? "#f59e0b" : "#94a3b8";
               return (
                 <div key={r.axis} className="radar-360-metric">
-                  <div className="radar-360-metric-header">
-                    <span className="radar-360-metric-name">{r.axis}</span>
+                  <span className="radar-360-metric-name">{r.axis}</span>
+                  <div className="radar-360-metric-row">
+                    <span className="radar-360-metric-team" style={{ color: homeColor }}>{fixture.home.name.slice(0, 10)}</span>
+                    <div className="radar-360-metric-bar">
+                      <div className="radar-360-metric-fill" style={{ width: `${Math.min(100, homeVal)}%`, background: homeColor }} />
+                    </div>
+                    <strong style={{ color: homeColor }}>{homeVal}</strong>
                   </div>
-                  <div className="radar-360-metric-bar">
-                    <div className="radar-360-metric-fill" style={{ width: `${r.home}%`, background: homeColor }} />
+                  <div className="radar-360-metric-row">
+                    <span className="radar-360-metric-team" style={{ color: awayColor }}>{fixture.away.name.slice(0, 10)}</span>
+                    <div className="radar-360-metric-bar">
+                      <div className="radar-360-metric-fill" style={{ width: `${Math.min(100, awayVal)}%`, background: awayColor }} />
+                    </div>
+                    <strong style={{ color: awayColor }}>{awayVal}</strong>
                   </div>
-                  <strong className="radar-360-metric-value" style={{ color: homeColor }}>{r.home}</strong>
-                  <span className="radar-360-metric-label" style={{ color: homeColor }}>{fixture.home.name}</span>
-
-                  <div className="radar-360-metric-bar away">
-                    <div className="radar-360-metric-fill" style={{ width: `${r.away}%`, background: awayColor }} />
-                  </div>
-                  <strong className="radar-360-metric-value" style={{ color: awayColor }}>{r.away}</strong>
-                  <span className="radar-360-metric-label" style={{ color: awayColor }}>{fixture.away.name}</span>
                 </div>
               );
             })}

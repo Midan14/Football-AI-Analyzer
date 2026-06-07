@@ -51,7 +51,7 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
  * GET /api/ab-test/results
  * Get A/B test results for the user
  */
-export const GET = withErrorHandling(async (request: NextRequest) => {
+export const GET = withErrorHandling(async (_request: NextRequest) => {
   const session = await auth();
   if (!session?.user?.id) return errorResponse(Errors.UNAUTHORIZED);
 

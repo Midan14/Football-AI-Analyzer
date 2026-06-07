@@ -9,8 +9,8 @@ export const demoCountries: Country[] = [
 ];
 
 export const demoLeagues: League[] = [
-  { id: "premier-league", countryId: "england", name: "Premier League", tier: "elite", season: "2026/27", coverageScore: 96 },
-  { id: "laliga", countryId: "spain", name: "LaLiga", tier: "elite", season: "2026/27", coverageScore: 94 },
+  { id: "premier-league", countryId: "england", name: "Premier League", tier: "elite", season: "2026/27", coverageScore: 96, logo: "https://media.api-sports.io/football/leagues/39.png" },
+  { id: "laliga", countryId: "spain", name: "LaLiga", tier: "elite", season: "2026/27", coverageScore: 94, logo: "https://media.api-sports.io/football/leagues/140.png" },
   { id: "primera-arg", countryId: "argentina", name: "Primera División", tier: "standard", season: "2026", coverageScore: 81 },
   { id: "j1-league", countryId: "japan", name: "J1 League", tier: "standard", season: "2026", coverageScore: 78 },
   { id: "national-league", countryId: "england", name: "National League", tier: "low", season: "2026/27", coverageScore: 54 },

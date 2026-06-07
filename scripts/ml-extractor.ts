@@ -13,18 +13,33 @@ const args = process.argv.slice(2);
 const leagueId = args.find((a) => a.startsWith("--league="))?.split("=")[1] ?? "";
 const season = args.find((a) => a.startsWith("--season="))?.split("=")[1] ?? "2023-2024";
 const limit = Number(args.find((a) => a.startsWith("--limit="))?.split("=")[1] ?? "100");
+const daysBack = Number(args.find((a) => a.startsWith("--days-back="))?.split("=")[1] ?? "0");
 const provider = getDataProvider();
 
-async function main() {
-  console.log(`[Extractor] League ${leagueId} · Season ${season} · Limit ${limit}`);
+function isoDateDaysAgo(daysAgo: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - daysAgo);
+  return date.toISOString().slice(0, 10);
+}
 
-  const fixtures = await provider.getFixtures({ leagueId });
-  const selected = fixtures.slice(0, limit);
+export function extractionDates(days: number): string[] {
+  const total = Math.max(0, Math.floor(days));
+  return Array.from({ length: total + 1 }, (_, index) => isoDateDaysAgo(index));
+}
+
+async function main() {
+  const dates = extractionDates(daysBack);
+  console.log(`[Extractor] League ${leagueId} · Season ${season} · Limit ${limit} · DaysBack ${daysBack}`);
 
   let inserted = 0;
   let skipped = 0;
 
-  for (const f of selected) {
+  for (const dateStr of dates) {
+    if (inserted >= limit) break;
+    const fixtures = await provider.getFixtures({ leagueId, date: dateStr });
+    const selected = fixtures.slice(0, Math.max(0, limit - inserted));
+
+    for (const f of selected) {
     try {
       const full = await provider.getMatch(f.id);
       if (!full.result) { skipped++; continue; }
@@ -90,11 +105,11 @@ async function main() {
           refereeHomeBias: f.referee?.homeBias ?? 0,
           refereeAvgPenalties: f.referee?.avgPenalties ?? 0.2,
           refereeStrictness: f.referee?.strictness ?? "medium",
-          homeWinOdds: f.market.homeWinOdds || null,
-          drawOdds: f.market.drawOdds || null,
-          awayWinOdds: f.market.awayWinOdds || null,
-          over25Odds: f.market.over25Odds || null,
-          bttsYesOdds: f.market.bttsYesOdds || null,
+          homeWinOdds: full.market.homeWinOdds || null,
+          drawOdds: full.market.drawOdds || null,
+          awayWinOdds: full.market.awayWinOdds || null,
+          over25Odds: full.market.over25Odds || null,
+          bttsYesOdds: full.market.bttsYesOdds || null,
           actualHomeGoals: full.result.homeGoals,
           actualAwayGoals: full.result.awayGoals,
           actualResult:
@@ -112,6 +127,7 @@ async function main() {
       process.stdout.write(`\rInserted ${inserted} · Skipped ${skipped}`);
     } catch (err) {
       skipped++;
+    }
     }
   }
 

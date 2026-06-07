@@ -15,7 +15,7 @@
  * 11. Expected Threat (xT) — Territorial dominance approximation
  *
  * Plus from deep-analysis-engine.ts:
- * 12. Monte Carlo Simulation (1000 iterations)
+ * 12. Hybrid Monte Carlo Simulation (50k iterations by default)
  * 13. t-Student Heavy Tail (Black Swan events)
  * 14. Game Theory (Nash Equilibrium)
  * 15. Psychological Analysis (Choking, Motivation)
@@ -32,3 +32,12 @@ export { hawkesModel, type HawkesResult } from "./hawkes-process";
 export { bayesianUpdate, type BayesianResult } from "./bayesian-updater";
 export { kalmanFilter, type KalmanResult } from "./kalman-filter";
 export { expectedThreatModel, type ExpectedThreatResult } from "./expected-threat";
+export { dixonColesModel, type DixonColesResult } from "./dixon-coles";
+export { hierarchicalPoisson, type HierarchicalPoissonResult } from "./hierarchical-poisson";
+export { calculateValueBets, type ValueBet, type ValueBetReport } from "./value-bet-calculator";
+export { bivariatePoissonModel, type BivariatePoissonResult } from "./bivariate-poisson";
+export { temporalBlendModel, type TemporalBlendResult } from "./temporal-blend";
+export { mlOpsMonitor, type MlOpsMonitorResult } from "./ml-ops-monitor";
+export { timeSeriesForecastModel, type TimeSeriesForecastResult } from "./time-series-forecast";
+export { causalSurvivalModel, type CausalSurvivalResult } from "./causal-survival";
+export { quantumStakeOptimizer, type QuantumOptimizerResult } from "./quantum-optimizer";

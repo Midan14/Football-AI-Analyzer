@@ -60,8 +60,11 @@ const PENALTY_EVENT_NAMES = new Set(["penalty", "missed-penalty", "penaltyshooto
 
 export function mapFixtureStatus(devName: string | undefined | null): Fixture["status"] {
   if (!devName) return "pre-match";
+  if (devName === "POSTPONED") return "postponed";
+  if (devName === "CANCELLED" || devName === "DELETED") return "cancelled";
   if (devName === "NS" || devName === "TBA") return "pre-match";
-  if (FINAL_STATES.has(devName) || ABANDONED_STATES.has(devName)) return "final";
+  if (FINAL_STATES.has(devName)) return "final";
+  if (devName === "ABANDONED") return "cancelled";
   return "live";
 }
 

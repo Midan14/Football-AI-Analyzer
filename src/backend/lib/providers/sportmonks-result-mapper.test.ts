@@ -25,9 +25,10 @@ describe("mapFixtureStatus", () => {
     expect(mapFixtureStatus("AWARDED")).toBe("final");
   });
 
-  it("treats CANCELLED / ABANDONED as final (the resolver flags abandoned)", () => {
-    expect(mapFixtureStatus("CANCELLED")).toBe("final");
-    expect(mapFixtureStatus("ABANDONED")).toBe("final");
+  it("maps POSTPONED and CANCELLED to dedicated statuses", () => {
+    expect(mapFixtureStatus("POSTPONED")).toBe("postponed");
+    expect(mapFixtureStatus("CANCELLED")).toBe("cancelled");
+    expect(mapFixtureStatus("ABANDONED")).toBe("cancelled");
   });
 
   it("treats live states as live", () => {

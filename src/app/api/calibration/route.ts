@@ -10,7 +10,7 @@ import { prisma } from "@/lib/db";
  * 
  * Perfect calibration: 70% predictions should win ~70% of the time
  */
-export const GET = withErrorHandling(async (request: NextRequest) => {
+export const GET = withErrorHandling(async (_request: NextRequest) => {
   const session = await auth();
   if (!session?.user?.id) return errorResponse(Errors.UNAUTHORIZED);
 

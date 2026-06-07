@@ -577,7 +577,7 @@ export class SportmonksProvider {
     }
   }
 
-  async getMatchDetail(fixtureId: string): Promise<{
+  async getMatchDetail(_fixtureId: string): Promise<{
     lineups: import("@/shared/domain").MatchLineup[];
     events: import("@/shared/domain").MatchEvent[];
     statistics: import("@/shared/domain").MatchStatistic[];

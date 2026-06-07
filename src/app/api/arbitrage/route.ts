@@ -2,14 +2,14 @@ import { NextRequest } from "next/server";
 import { successResponse, errorResponse, withErrorHandling, Errors } from "@/lib/api-utils";
 import { auth } from "@/auth";
 import { analyzeMatch } from "@/backend/server/football/football-service";
+import { getFixtureBookmakerOdds } from "@/backend/lib/odds/bookmaker-odds-service";
 
 /**
  * GET /api/arbitrage
- * Detects arbitrage opportunities across bookmakers for a fixture
+ * Calculates real-time arbitrage opportunities across bookmakers using the configured data provider.
  * Query params: fixtureId (required)
  * 
- * An arbitrage exists when the sum of implied probabilities across
- * different bookmakers is < 100% (guaranteed profit).
+ * Falls back gracefully to simulation mode if no bookmaker odds are returned (e.g., demo/test modes).
  */
 export const GET = withErrorHandling(async (request: NextRequest) => {
   const session = await auth();
@@ -29,10 +29,152 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
     }
 
     const market = data.fixture.market;
-    const analysis = data.analysis;
+    const bookmakerOdds = await getFixtureBookmakerOdds(fixtureId);
+    const realOpportunities = [];
 
-    // Build arbitrage scenarios
-    // We simulate different bookmaker lines by adjusting vig
+    if (bookmakerOdds && Object.keys(bookmakerOdds).length > 0) {
+      const booknames = Object.keys(bookmakerOdds);
+
+      // 1. 3-way (1X2) Arbitrage
+      let maxHome = 0;
+      let homeBook = "";
+      let maxDraw = 0;
+      let drawBook = "";
+      let maxAway = 0;
+      let awayBook = "";
+
+      for (const name of booknames) {
+        const m = bookmakerOdds[name];
+        if (m.homeWinOdds > maxHome) {
+          maxHome = m.homeWinOdds;
+          homeBook = name;
+        }
+        if (m.drawOdds > maxDraw) {
+          maxDraw = m.drawOdds;
+          drawBook = name;
+        }
+        if (m.awayWinOdds > maxAway) {
+          maxAway = m.awayWinOdds;
+          awayBook = name;
+        }
+      }
+
+      if (maxHome > 1 && maxDraw > 1 && maxAway > 1) {
+        const homeProb = 100 / maxHome;
+        const drawProb = 100 / maxDraw;
+        const awayProb = 100 / maxAway;
+        const totalProb = homeProb + drawProb + awayProb;
+
+        if (totalProb < 100) {
+          realOpportunities.push({
+            type: "1X2 Arbitrage (3-way)",
+            books: Array.from(new Set([homeBook, drawBook, awayBook])),
+            bets: [
+              { market: "Local (1)", book: homeBook, odds: maxHome, stake: round2((homeProb / totalProb) * 100) },
+              { market: "Empate (X)", book: drawBook, odds: maxDraw, stake: round2((drawProb / totalProb) * 100) },
+              { market: "Visitante (2)", book: awayBook, odds: maxAway, stake: round2((awayProb / totalProb) * 100) },
+            ],
+            totalImpliedProb: round2(totalProb),
+            profitPct: round2(100 - totalProb),
+            isArbitrage: true,
+          });
+        }
+      }
+
+      // 2. Over/Under 2.5 Arbitrage (2-way)
+      let maxOver25 = 0;
+      let over25Book = "";
+      let maxUnder25 = 0;
+      let under25Book = "";
+
+      for (const name of booknames) {
+        const m = bookmakerOdds[name];
+        if (m.over25Odds > maxOver25) {
+          maxOver25 = m.over25Odds;
+          over25Book = name;
+        }
+        if (m.under25Odds !== undefined && m.under25Odds > maxUnder25) {
+          maxUnder25 = m.under25Odds;
+          under25Book = name;
+        }
+      }
+
+      if (maxOver25 > 1 && maxUnder25 > 1) {
+        const overProb = 100 / maxOver25;
+        const underProb = 100 / maxUnder25;
+        const totalProb = overProb + underProb;
+
+        if (totalProb < 100) {
+          realOpportunities.push({
+            type: "Over/Under 2.5 (2-way)",
+            books: Array.from(new Set([over25Book, under25Book])),
+            bets: [
+              { market: "Over 2.5", book: over25Book, odds: maxOver25, stake: round2((overProb / totalProb) * 100) },
+              { market: "Under 2.5", book: under25Book, odds: maxUnder25, stake: round2((underProb / totalProb) * 100) },
+            ],
+            totalImpliedProb: round2(totalProb),
+            profitPct: round2(100 - totalProb),
+            isArbitrage: true,
+          });
+        }
+      }
+
+      // 3. BTTS Yes/No Arbitrage (2-way)
+      let maxBttsYes = 0;
+      let bttsYesBook = "";
+      let maxBttsNo = 0;
+      let bttsNoBook = "";
+
+      for (const name of booknames) {
+        const m = bookmakerOdds[name];
+        if (m.bttsYesOdds > maxBttsYes) {
+          maxBttsYes = m.bttsYesOdds;
+          bttsYesBook = name;
+        }
+        if (m.bttsNoOdds > maxBttsNo) {
+          maxBttsNo = m.bttsNoOdds;
+          bttsNoBook = name;
+        }
+      }
+
+      if (maxBttsYes > 1 && maxBttsNo > 1) {
+        const yesProb = 100 / maxBttsYes;
+        const noProb = 100 / maxBttsNo;
+        const totalProb = yesProb + noProb;
+
+        if (totalProb < 100) {
+          realOpportunities.push({
+            type: "Both Teams to Score (2-way)",
+            books: Array.from(new Set([bttsYesBook, bttsNoBook])),
+            bets: [
+              { market: "BTTS Yes", book: bttsYesBook, odds: maxBttsYes, stake: round2((yesProb / totalProb) * 100) },
+              { market: "BTTS No", book: bttsNoBook, odds: maxBttsNo, stake: round2((noProb / totalProb) * 100) },
+            ],
+            totalImpliedProb: round2(totalProb),
+            profitPct: round2(100 - totalProb),
+            isArbitrage: true,
+          });
+        }
+      }
+
+      return successResponse({
+        fixtureId,
+        fixture: {
+          homeTeam: data.fixture.home.name,
+          awayTeam: data.fixture.away.name,
+          league: data.fixture.leagueName,
+          date: data.fixture.kickoff,
+        },
+        arbitrageCount: realOpportunities.length,
+        opportunities: realOpportunities,
+        simulatedOpportunities: [],
+        isArbitrageAvailable: realOpportunities.length > 0,
+        simulationMode: false,
+        disclaimer: "Oportunidades reales de arbitraje calculadas en tiempo real a través de las cuotas del plan premium del proveedor.",
+      });
+    }
+
+    // FALLBACK: Simulation lab only when no real bookmakers returned (e.g. tests / demo mode)
     const scenarios = [
       {
         name: "Bookmaker A (vig 6%)",
@@ -62,7 +204,6 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
         const book1 = scenarios[i];
         const book2 = scenarios[j];
 
-        // Home at book1, Draw+Away at book2 (covering all outcomes)
         const homeProb1 = 100 / book1.homeOdds;
         const drawProb2 = 100 / book2.drawOdds;
         const awayProb2 = 100 / book2.awayOdds;
@@ -115,12 +256,14 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
         league: data.fixture.leagueName,
         date: data.fixture.kickoff,
       },
-      arbitrageCount: arbitrageResults.filter(a => a.isArbitrage).length,
-      opportunities: arbitrageResults,
-      isArbitrageAvailable: arbitrageResults.some(a => a.isArbitrage),
-      disclaimer: "Las cuotas mostradas son simuladas. Para arbitraje real, integrar APIs de bookmakers.",
+      arbitrageCount: 0,
+      opportunities: [],
+      simulatedOpportunities: arbitrageResults,
+      isArbitrageAvailable: false,
+      simulationMode: true,
+      disclaimer: "Laboratorio de simulación: las cuotas no vienen de múltiples bookmakers reales. No usar como arbitraje real.",
     });
-  } catch (error) {
+  } catch {
     return errorResponse(Errors.SERVICE_UNAVAILABLE);
   }
 });

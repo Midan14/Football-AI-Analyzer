@@ -44,7 +44,7 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
     const data = await res.json();
 
     return successResponse({ sent: true, id: data.id });
-  } catch (error) {
+  } catch {
     return errorResponse(Errors.SERVICE_UNAVAILABLE);
   }
 });

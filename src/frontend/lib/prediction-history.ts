@@ -9,6 +9,10 @@ export type PredictionRecord = {
   predictedMarket: string;
   predictedProbability: number;
   fairOdds: number;
+  takenOdds?: number;
+  closingOdds?: number;
+  clvPercent?: number;
+  bookmaker?: string;
   confidence: number;
   riskLevel: string;
   stakeUnits: number;

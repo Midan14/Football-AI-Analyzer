@@ -9,6 +9,7 @@
 import { prisma } from "@/lib/db";
 import { getDataProvider } from "@/backend/lib/providers/provider-factory";
 import { resolvePrediction } from "@/backend/lib/analysis/outcome-resolver";
+import { enrichPredictionWithClosingLine } from "@/backend/lib/odds/clv-service";
 import { cache, cacheKeys } from "@/lib/cache";
 import { captureException } from "@/lib/sentry";
 
@@ -33,6 +34,7 @@ export async function runResolveJob(opts: { userId?: string } = {}): Promise<Res
       prediction: true,
       stakeUnits: true,
       odds: true,
+      bookmaker: true,
     },
   });
 
@@ -56,12 +58,18 @@ export async function runResolveJob(opts: { userId?: string } = {}): Promise<Res
         odds: pred.odds,
         result: fixture.result,
       });
+
+      const closing = await enrichPredictionWithClosingLine(pred);
+
       await prisma.prediction.update({
         where: { id: pred.id },
         data: {
           status: resolution.status,
           roi: resolution.roi,
           resultDate: new Date(),
+          closingOdds: closing.closingOdds,
+          clvPercent: closing.clvPercent,
+          bookmaker: closing.bookmaker,
         },
       });
       touchedUsers.add(pred.userId);

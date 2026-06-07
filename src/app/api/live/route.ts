@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
+import { getLiveMatchDetail, listLiveFixtures } from "@/backend/server/football/football-service";
 import { successResponse, withErrorHandling } from "@/lib/api-utils";
-import { ApiFootballProvider } from "@/backend/lib/providers/api-football-provider";
-import { getDataProvider } from "@/backend/lib/providers/provider-factory";
+import { cache, cacheKeys } from "@/lib/cache";
 
 /**
  * GET /api/live
@@ -10,20 +10,27 @@ import { getDataProvider } from "@/backend/lib/providers/provider-factory";
  *   id — optional fixture ID for detailed live data (events + statistics)
  */
 export const GET = withErrorHandling(async (request: NextRequest) => {
-  const provider = getDataProvider();
   const fixtureId = request.nextUrl.searchParams.get("id");
 
   if (fixtureId) {
-    // Detailed live data for a specific fixture
-    const data = provider instanceof ApiFootballProvider
-      ? await provider.getMatchLive(fixtureId)
-      : { fixture: await provider.getMatch(fixtureId), events: [], statistics: [] };
+    const cacheKey = cacheKeys.liveDetail(fixtureId);
+    const cached = await cache.get<Awaited<ReturnType<typeof getLiveMatchDetail>>>(cacheKey);
+    if (cached) {
+      return successResponse(cached);
+    }
+
+    const data = await getLiveMatchDetail(fixtureId);
+    await cache.set(cacheKey, data, 8);
     return successResponse(data);
   }
 
-  // All live fixtures
-  const fixtures = provider instanceof ApiFootballProvider
-    ? await provider.getLiveFixtures()
-    : [];
-  return successResponse({ fixtures, count: fixtures.length });
+  const cacheKey = cacheKeys.liveFixtures();
+  const cached = await cache.get<Awaited<ReturnType<typeof listLiveFixtures>>>(cacheKey);
+  if (cached) {
+    return successResponse(cached);
+  }
+
+  const data = await listLiveFixtures();
+  await cache.set(cacheKey, data, 8);
+  return successResponse(data);
 });

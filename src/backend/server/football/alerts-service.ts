@@ -2,10 +2,12 @@ import { prisma } from "@/lib/db";
 import { getDataProvider } from "@/backend/lib/providers/provider-factory";
 import { analyzeFixture } from "@/backend/lib/analysis/analysis-engine";
 import { captureException } from "@/lib/sentry";
+import { getLineMovementForFixture } from "@/backend/lib/odds/odds-snapshot-service";
+import { getFixtureBookmakerOdds } from "@/backend/lib/odds/bookmaker-odds-service";
+import { compareBookmakerOdds } from "@/backend/lib/odds/odds-intelligence";
 import type { Alert, AlertType } from "@prisma/client";
 
 const ALERT_COOLDOWN_MS = 15 * 60 * 1000;
-const ODD_MOVEMENT_ENABLED = process.env.FEATURE_ODD_MOVEMENT_ALERTS === "true";
 
 type AlertCondition = {
   fixtureId?: string;
@@ -120,14 +122,23 @@ async function evaluateAlert(alert: Alert): Promise<AlertOutput | null> {
     }
 
     case "ODD_MOVEMENT": {
-      if (!ODD_MOVEMENT_ENABLED) {
-        // Disabled until a real odds-history feed is wired in.
-        // See docs/engine-roadmap.md (Phase 1).
-        return null;
-      }
-      // Real implementation requires provider.getOddsHistory(fixtureId).
-      // No provider exposes that yet — fail closed rather than synthesize.
-      return null;
+      const movements = await getLineMovementForFixture(fixtureId, threshold);
+      if (movements.length === 0) break;
+
+      const top = movements[0];
+      const direction = top.movementPercent > 0 ? "subió" : "bajó";
+      return {
+        id: alert.id,
+        type: alert.type,
+        fixtureId,
+        fixtureName: `${fixture.home.name} vs ${fixture.away.name}`,
+        message: `Movimiento de cuota: ${top.label} (${top.bookmaker}) ${direction} ${Math.abs(top.movementPercent)}% (${top.previousOdds} → ${top.currentOdds}).`,
+        severity: Math.abs(top.movementPercent) >= 10 ? "high" : "medium",
+        triggerValue: Math.abs(top.movementPercent),
+        threshold,
+        createdAt: alert.createdAt,
+        status: "TRIGGERED",
+      };
     }
 
     case "LINEUP_CHANGE": {
@@ -180,10 +191,15 @@ async function evaluateAlert(alert: Alert): Promise<AlertOutput | null> {
     }
 
     case "MARKET_DIVERGENCE": {
+      const bookmakers = await getFixtureBookmakerOdds(fixtureId);
+      const compare = compareBookmakerOdds(fixtureId, bookmakers);
+      const providerSpread = compare.avgSpreadPercent;
+
       const maxDivergence = Math.max(
         ...analysis.valueTable.map(
           (row) => Math.abs(row.modelProbability - row.marketProbability)
-        )
+        ),
+        providerSpread
       );
       if (maxDivergence > threshold) {
         const worst = analysis.valueTable.sort(
@@ -191,12 +207,16 @@ async function evaluateAlert(alert: Alert): Promise<AlertOutput | null> {
             Math.abs(b.modelProbability - b.marketProbability) -
             Math.abs(a.modelProbability - a.marketProbability)
         )[0];
+        const outlierNote =
+          compare.outlierCount > 0
+            ? ` · ${compare.outlierCount} mercados con outlier entre bookmakers (spread medio ${compare.avgSpreadPercent}%).`
+            : "";
         return {
           id: alert.id,
           type: alert.type,
           fixtureId,
           fixtureName: `${fixture.home.name} vs ${fixture.away.name}`,
-          message: `Divergencia modelo-mercado >${threshold}% en ${worst.market}. Modelo: ${worst.modelProbability}% | Mercado: ${worst.marketProbability}% (Diferencia: ${Math.abs(worst.modelProbability - worst.marketProbability)}%)`,
+          message: `Divergencia modelo-mercado >${threshold}% en ${worst.market}. Modelo: ${worst.modelProbability}% | Mercado: ${worst.marketProbability}% (Diferencia: ${Math.abs(worst.modelProbability - worst.marketProbability)}%)${outlierNote}`,
           severity: maxDivergence > 20 ? "high" : "medium",
           triggerValue: maxDivergence,
           threshold,

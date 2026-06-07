@@ -15,8 +15,8 @@
  */
 
 import type { Fixture } from "@/shared/domain";
-import { negBinomModel, type NegBinomResult } from "./negative-binomial";
-import { eloModel, type EloResult } from "./elo-rating";
+import { negBinomModel } from "./negative-binomial";
+import { eloModel } from "./elo-rating";
 
 type Probs1X2 = { homeWin: number; draw: number; awayWin: number; over25?: number; btts?: number };
 

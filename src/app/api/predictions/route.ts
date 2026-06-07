@@ -11,7 +11,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
  * GET /api/predictions
  * Get user's predictions
  */
-export const GET = withErrorHandling(async (request: NextRequest) => {
+export const GET = withErrorHandling(async (_request: NextRequest) => {
   const session = await auth();
 
   if (!session?.user?.id) {
@@ -67,28 +67,56 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
     );
   }
 
-  const { fixtureId, leagueId, market, prediction, probability, odds, stakeUnits, notes } =
+  const { fixtureId, leagueId, market, prediction, probability, odds, fairOdds, bookmaker, stakeUnits, notes } =
     validation.data;
 
-  const pred = await prisma.prediction.create({
-    data: {
-      userId: session.user.id,
-      fixtureId,
-      leagueId: leagueId ?? null,
-      market,
-      prediction,
-      probability,
-      odds: odds || null,
-      stakeUnits,
-      notes: notes || null,
-      status: "OPEN",
-    },
-  });
+  try {
+    const userId = session.user!.id!;
+    const pred = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUnique({ where: { id: userId } });
+      if (!user) {
+        throw new Error("User not found");
+      }
+      
+      if (user.bankroll < stakeUnits) {
+        throw new Error("Insufficient bankroll");
+      }
+      
+      // Deduct bankroll
+      await tx.user.update({
+        where: { id: userId },
+        data: { bankroll: { decrement: stakeUnits } },
+      });
+      
+      // Create prediction
+      return tx.prediction.create({
+        data: {
+          userId: userId,
+          fixtureId,
+          leagueId: leagueId ?? null,
+          market,
+          prediction,
+          probability,
+          odds: odds || null,
+          fairOdds: fairOdds || null,
+          bookmaker: bookmaker || null,
+          stakeUnits,
+          notes: notes || null,
+          status: "OPEN",
+        },
+      });
+    });
 
-  // Invalidate cache
-  await cache.delete(cacheKeys.userPredictions(session.user.id));
+    // Invalidate cache
+    await cache.delete(cacheKeys.userPredictions(userId));
 
-  addBreadcrumb(`Prediction created for ${fixtureId}`, "predictions", "info");
+    addBreadcrumb(`Prediction created for ${fixtureId}`, "predictions", "info");
 
-  return successResponse(pred, 201);
+    return successResponse(pred, 201);
+  } catch (err: any) {
+    if (err.message === "Insufficient bankroll") {
+      return errorResponse({ code: "INSUFFICIENT_FUNDS", message: "No tienes saldo suficiente en tu bankroll." }, 400);
+    }
+    throw err;
+  }
 });

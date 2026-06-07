@@ -33,6 +33,10 @@ export interface ApiResponse<T = any> {
   };
 }
 
+function isErrorEnvelope(error: unknown): error is { code?: string; message?: string; details?: unknown } {
+  return typeof error === "object" && error !== null && ("code" in error || "message" in error);
+}
+
 /**
  * Create success response
  */
@@ -71,6 +75,10 @@ export function errorResponse(
   } else if (typeof error === "string") {
     code = "INTERNAL_SERVER_ERROR";
     message = error;
+  } else if (isErrorEnvelope(error)) {
+    code = error.code ?? code;
+    message = error.message ?? message;
+    details = error.details;
   } else if (error) {
     code = "INTERNAL_SERVER_ERROR";
     message = String(error);

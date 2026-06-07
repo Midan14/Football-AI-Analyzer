@@ -1,6 +1,12 @@
 export function formatTime(value: string) {
   const date = new Date(value);
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  if (Number.isNaN(date.getTime())) return "--:--";
+  return date.toLocaleTimeString("es-CO", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/Bogota",
+  });
 }
 
 export function formatShortDate(value: string) {

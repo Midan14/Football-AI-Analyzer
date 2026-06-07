@@ -14,10 +14,12 @@ const PUBLIC_ROUTES = [
   "/api/countries",
   "/api/leagues",
   "/api/fixtures",
+  "/api/odds/by-date",
   "/api/match",
   "/api/live",
   "/api/openapi",
   "/api/health",
+  "/api/ml/status",
   "/api/cron",
 ];
 

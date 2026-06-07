@@ -21,17 +21,41 @@ export async function checkRateLimit(
   if (!existing) {
     const roundedStart = new Date(Math.floor(now.getTime() / 60000) * 60000);
     const roundedEnd = new Date(roundedStart.getTime() + windowMinutes * 60 * 1000);
-    await prisma.rateLimit.create({
-      data: {
-        userId: userId ?? null,
-        endpoint,
-        requests: 1,
-        windowStart: roundedStart,
-        windowEnd: roundedEnd,
-      },
-    });
+    try {
+      await prisma.rateLimit.create({
+        data: {
+          userId: userId ?? null,
+          endpoint,
+          requests: 1,
+          windowStart: roundedStart,
+          windowEnd: roundedEnd,
+        },
+      });
 
-    return { allowed: true, remaining: limit - 1, resetAt: roundedEnd };
+      return { allowed: true, remaining: limit - 1, resetAt: roundedEnd };
+    } catch {
+      const raced = await prisma.rateLimit.findFirst({
+        where: {
+          userId: userId ?? null,
+          endpoint,
+          windowStart: roundedStart,
+        },
+      });
+
+      if (!raced) {
+        throw new Error("Rate limit record missing after concurrent create");
+      }
+
+      const updated = await prisma.rateLimit.update({
+        where: { id: raced.id },
+        data: { requests: { increment: 1 } },
+      });
+
+      const allowed = updated.requests <= limit;
+      const remaining = Math.max(0, limit - updated.requests);
+
+      return { allowed, remaining, resetAt: updated.windowEnd };
+    }
   }
 
   const updated = await prisma.rateLimit.update({
